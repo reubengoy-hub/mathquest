@@ -66,7 +66,7 @@
 
 <script src="js/api.js"></script>
 <script>
-const TYPE_LABELS = { quiz: '🧠 Test', fill_blank: '✏️ Cálculo', matching: '🔗 Relacionar' };
+const TYPE_LABELS = { quiz: '🧠 Test', fill_blank: '✏️ Cálculo', matching: '🔗 Relacionar', transform_game: '🎮 Juego Visual' };
 let challengeId, challengeData, startTime, timerInterval;
 
 // Quiz state
@@ -124,6 +124,9 @@ function renderChallenge() {
     body.innerHTML = buildFillBlank(content);
   } else if (type === 'matching') {
     body.innerHTML = buildMatching(content);
+  } else if (type === 'transform_game') {
+    body.innerHTML = buildTransformGame(content);
+    initTransformGame(content);
   } else {
     body.innerHTML = '<p class="error-msg">Tipo de desafío desconocido</p>';
   }
@@ -406,14 +409,281 @@ function showResultModal(score, timeSpent, progress) {
 function retryChallenge() {
   document.getElementById('result-modal').classList.add('hidden');
   qIndex = 0; quizAnswers = []; selectedLeft = null; matchedCount = 0; matchResults = []; fillSubmitted = false;
+  tgState = { ...tgState, levelIndex: 0, animating: false };
   renderChallenge();
   startTimer();
 }
 
-// Show first question after build
-document.addEventListener('DOMContentLoaded', () => {
-  // quiz initial render happens via renderChallenge → showQuestion called after build
-});
+// ─────────────────── TRANSFORM GAME ─────────────────────────────────────────
+
+// "F" shape — icónica en gráficos por ordenador para mostrar transformaciones
+const TG_SHAPE = [
+  [-0.8,-1.3],[0.8,-1.3],[0.8,-0.8],
+  [-0.1,-0.8],[-0.1,-0.3],[0.5,-0.3],
+  [0.5, 0.2],[-0.1, 0.2],[-0.1, 1.3],
+  [-0.8, 1.3]
+];
+
+let tgState = {
+  content: null, levelIndex: 0, animating: false,
+  levelAttempts: [], levelSolved: [], starsPerLevel: [],
+  currentPoints: [...TG_SHAPE], targetPoints: []
+};
+
+function buildTransformGame(c) {
+  return `
+  <div class="transform-game">
+    <div class="tg-progress" id="tg-progress"></div>
+    <div class="tg-level-header">
+      <div>
+        <div class="tg-level-num" id="tg-levelnum"></div>
+        <div class="tg-level-name" id="tg-levelname"></div>
+      </div>
+      <div class="tg-stars" id="tg-stars">★★★</div>
+    </div>
+    <p class="tg-desc" id="tg-desc"></p>
+    <div class="tg-layout">
+      <div class="tg-canvas-wrap">
+        <div class="tg-legend">
+          <span class="tg-leg-item tg-leg-orig">Original</span>
+          <span class="tg-leg-item tg-leg-target">Objetivo</span>
+          <span class="tg-leg-item tg-leg-user">Tu resultado</span>
+        </div>
+        <canvas id="tg-canvas" width="340" height="340"></canvas>
+      </div>
+      <div class="tg-panel">
+        <div class="tg-matrix-label">Tu matriz 2×2:</div>
+        <div class="tg-matrix-wrap">
+          <div class="tg-bracket">⎡<br><br>⎣</div>
+          <div class="tg-cells">
+            <div class="tg-row">
+              <input class="tg-cell" id="tga" type="number" value="1" step="0.5">
+              <input class="tg-cell" id="tgb" type="number" value="0" step="0.5">
+            </div>
+            <div class="tg-row">
+              <input class="tg-cell" id="tgc" type="number" value="0" step="0.5">
+              <input class="tg-cell" id="tgd" type="number" value="1" step="0.5">
+            </div>
+          </div>
+          <div class="tg-bracket">⎤<br><br>⎦</div>
+        </div>
+        <div class="tg-cell-labels">
+          <span>a</span><span>b</span><span>c</span><span>d</span>
+        </div>
+        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px;">
+          Efecto: x′=ax+by &nbsp;|&nbsp; y′=cx+dy
+        </div>
+        <div class="tg-attempt-info">Intentos: <strong id="tg-attempts">0</strong></div>
+        <button class="btn btn-primary full-width" onclick="tgApply()">▶ Aplicar</button>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="tgHint()">💡 Pista</button>
+          <button class="btn btn-ghost btn-sm" style="flex:1" onclick="tgReset()">↺ Reset</button>
+        </div>
+        <div class="tg-hint-box hidden" id="tg-hintbox"></div>
+        <div class="tg-feedback hidden" id="tg-feedback"></div>
+      </div>
+    </div>
+    <div class="tg-next-wrap hidden" id="tg-next-wrap">
+      <button class="btn btn-success btn-lg" onclick="tgNextLevel()">Siguiente nivel →</button>
+    </div>
+  </div>`;
+}
+
+function initTransformGame(content) {
+  tgState.content = content;
+  tgState.levelIndex = 0;
+  tgState.levelAttempts = new Array(content.levels.length).fill(0);
+  tgState.levelSolved   = new Array(content.levels.length).fill(false);
+  tgState.starsPerLevel = new Array(content.levels.length).fill(0);
+
+  // Render progress dots
+  document.getElementById('tg-progress').innerHTML =
+    content.levels.map((_,i) => `<div class="tg-dot" id="tgdot-${i}"></div>`).join('');
+
+  // Enter key on matrix inputs
+  ['tga','tgb','tgc','tgd'].forEach(id =>
+    document.getElementById(id)?.addEventListener('keydown', e => { if (e.key==='Enter') tgApply(); })
+  );
+  tgLoadLevel();
+}
+
+function tgApplyMatrix([x,y], [a,b,c,d]) { return [a*x+b*y, c*x+d*y]; }
+
+function tgLoadLevel() {
+  const { content, levelIndex: i } = tgState;
+  const level = content.levels[i];
+  const n = content.levels.length;
+
+  document.getElementById('tg-levelnum').textContent  = `Nivel ${i+1} de ${n}`;
+  document.getElementById('tg-levelname').textContent = level.name;
+  document.getElementById('tg-desc').textContent      = level.desc;
+  document.getElementById('tg-attempts').textContent  = '0';
+  document.getElementById('tg-stars').textContent     = '★★★';
+  document.getElementById('tg-next-wrap').classList.add('hidden');
+  document.getElementById('tg-feedback').classList.add('hidden');
+  document.getElementById('tg-hintbox').classList.add('hidden');
+  ['tga','tgb','tgc','tgd'].forEach((id,i) =>
+    { const el=document.getElementById(id); if(el) el.value=[1,0,0,1][i]; }
+  );
+
+  // Update dots
+  for (let j=0; j<n; j++) {
+    const dot = document.getElementById(`tgdot-${j}`);
+    if (!dot) continue;
+    dot.className = 'tg-dot' + (j<i?' tg-dot-done':j===i?' tg-dot-active':'');
+  }
+
+  tgState.targetPoints  = TG_SHAPE.map(p => tgApplyMatrix(p, level.matrix));
+  tgState.currentPoints = TG_SHAPE.map(p => [...p]);
+  tgDraw(tgState.currentPoints);
+}
+
+function tgDraw(userPts) {
+  const canvas = document.getElementById('tg-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const S = 340, sc = 48, ox = S/2, oy = S/2;
+  const tc = ([x,y]) => [ox+x*sc, oy-y*sc];
+
+  ctx.clearRect(0,0,S,S);
+
+  // Grid
+  ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=1;
+  for (let v=-3.5; v<=3.5; v++) {
+    ctx.beginPath(); ctx.moveTo(...tc([v,-3.5])); ctx.lineTo(...tc([v,3.5])); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(...tc([-3.5,v])); ctx.lineTo(...tc([3.5,v])); ctx.stroke();
+  }
+
+  // Axes
+  ctx.strokeStyle='#9ca3af'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(...tc([-3.5,0])); ctx.lineTo(...tc([3.5,0])); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(...tc([0,-3.5])); ctx.lineTo(...tc([0,3.5])); ctx.stroke();
+  ctx.fillStyle='#9ca3af'; ctx.font='bold 12px sans-serif';
+  ctx.fillText('x', tc([3.3,0])[0]-4, tc([3.3,0])[1]-6);
+  ctx.fillText('y', tc([0,3.3])[0]+6, tc([0,3.3])[1]+4);
+
+  // Helper: draw closed polygon
+  const poly = (pts, fill, stroke, alpha=1) => {
+    if (!pts.length) return;
+    ctx.globalAlpha=alpha; ctx.beginPath();
+    ctx.moveTo(...tc(pts[0]));
+    pts.slice(1).forEach(p => ctx.lineTo(...tc(p)));
+    ctx.closePath();
+    ctx.fillStyle=fill; ctx.fill();
+    ctx.strokeStyle=stroke; ctx.lineWidth=2.5; ctx.stroke();
+    ctx.globalAlpha=1;
+  };
+
+  // Original shape (gray dashed)
+  ctx.globalAlpha=0.3; ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(...tc(TG_SHAPE[0]));
+  TG_SHAPE.slice(1).forEach(p=>ctx.lineTo(...tc(p)));
+  ctx.closePath(); ctx.strokeStyle='#6b7280'; ctx.lineWidth=2; ctx.stroke();
+  ctx.globalAlpha=1; ctx.setLineDash([]);
+
+  // Target (red)
+  poly(tgState.targetPoints, 'rgba(239,68,68,0.12)', '#ef4444');
+
+  // User result (purple)
+  poly(userPts, 'rgba(124,58,237,0.22)', '#7c3aed');
+}
+
+function tgGetMatrix() {
+  return ['tga','tgb','tgc','tgd'].map(id => parseFloat(document.getElementById(id)?.value)||0);
+}
+
+function tgApply() {
+  if (tgState.animating) return;
+  const m = tgGetMatrix();
+  const toPoints = TG_SHAPE.map(p => tgApplyMatrix(p, m));
+  tgState.levelAttempts[tgState.levelIndex]++;
+  document.getElementById('tg-attempts').textContent = tgState.levelAttempts[tgState.levelIndex];
+
+  const from = tgState.currentPoints.map(p=>[...p]);
+  tgAnimate(from, toPoints, 550, () => {
+    tgState.currentPoints = toPoints;
+    tgCheckCorrect(m, tgState.content.levels[tgState.levelIndex].matrix);
+  });
+}
+
+function tgAnimate(from, to, ms, done) {
+  tgState.animating = true;
+  const t0 = Date.now();
+  (function frame() {
+    const t = Math.min(1,(Date.now()-t0)/ms);
+    const e = t<0.5 ? 2*t*t : -1+(4-2*t)*t;
+    tgDraw(from.map((p,i)=>[p[0]+(to[i][0]-p[0])*e, p[1]+(to[i][1]-p[1])*e]));
+    t<1 ? requestAnimationFrame(frame) : (tgState.animating=false, done&&done());
+  })();
+}
+
+function tgCheckCorrect(userM, correctM) {
+  const ok = userM.every((v,i) => Math.abs(v-correctM[i])<0.15);
+  const fb = document.getElementById('tg-feedback');
+  fb.classList.remove('hidden');
+
+  if (ok) {
+    const att = tgState.levelAttempts[tgState.levelIndex];
+    const stars = att===1?3:att===2?2:1;
+    tgState.starsPerLevel[tgState.levelIndex] = stars;
+    tgState.levelSolved[tgState.levelIndex]   = true;
+    document.getElementById('tg-stars').textContent = '★'.repeat(stars)+'☆'.repeat(3-stars);
+    fb.className='tg-feedback tg-correct';
+    fb.innerHTML=`✓ ¡Correcto! ${'★'.repeat(stars)+'☆'.repeat(3-stars)}<br>
+      <small>La matriz correcta es [[${correctM[0]},${correctM[1]}],[${correctM[2]},${correctM[3]}]]</small>`;
+    tgCelebrate();
+    document.getElementById(`tgdot-${tgState.levelIndex}`)?.classList.replace('tg-dot-active','tg-dot-done');
+    const isLast = tgState.levelIndex === tgState.content.levels.length-1;
+    setTimeout(() => isLast ? tgFinish() : document.getElementById('tg-next-wrap').classList.remove('hidden'), 1200);
+  } else {
+    const diff = Math.max(...userM.map((v,i)=>Math.abs(v-correctM[i])));
+    fb.className='tg-feedback tg-wrong';
+    fb.textContent = diff<1 ? '✗ ¡Muy cerca! Ajusta un poco más.' : diff<2 ? '✗ Casi. Revisa los valores.' : '✗ No es correcto. Prueba la pista.';
+  }
+}
+
+function tgCelebrate() {
+  const canvas = document.getElementById('tg-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const colors = ['#7c3aed','#10b981','#f59e0b','#ef4444','#0ea5e9'];
+  const parts = Array.from({length:24},()=>({
+    x:170+(Math.random()-0.5)*120, y:170+(Math.random()-0.5)*120,
+    vx:(Math.random()-0.5)*7, vy:(Math.random()-0.5)*7-2,
+    c:colors[Math.floor(Math.random()*5)], r:Math.random()*5+3, life:1
+  }));
+  const t0=Date.now();
+  (function boom(){
+    if(Date.now()-t0>1100){tgDraw(tgState.currentPoints);return;}
+    tgDraw(tgState.currentPoints);
+    parts.forEach(p=>{
+      p.x+=p.vx; p.y+=p.vy; p.vy+=0.18; p.life-=0.025;
+      ctx.globalAlpha=Math.max(0,p.life);
+      ctx.fillStyle=p.c; ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=1;
+    });
+    requestAnimationFrame(boom);
+  })();
+}
+
+function tgNextLevel() { tgState.levelIndex++; tgLoadLevel(); }
+function tgHint()      {
+  const h=document.getElementById('tg-hintbox');
+  h.textContent='💡 '+tgState.content.levels[tgState.levelIndex].hint;
+  h.classList.remove('hidden');
+}
+function tgReset() {
+  ['tga','tgb','tgc','tgd'].forEach((id,i)=>{const el=document.getElementById(id);if(el)el.value=[1,0,0,1][i];});
+  tgState.currentPoints=TG_SHAPE.map(p=>[...p]);
+  tgDraw(tgState.currentPoints);
+  document.getElementById('tg-feedback').classList.add('hidden');
+}
+function tgFinish() {
+  const total=tgState.starsPerLevel.reduce((a,b)=>a+b,0);
+  const max=tgState.content.levels.length*3;
+  submitResult(Math.round((total/max)*100));
+}
 
 </script>
 </body>
