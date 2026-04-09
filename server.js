@@ -295,6 +295,38 @@ app.delete('/api/admin/challenges/:id', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── SEED TRANSFORM GAME (one-shot) ───────────────────────────────────────────
+
+app.post('/api/admin/seed-transform', requireAdmin, async (req, res) => {
+  try {
+    const existing = await qOne("SELECT id FROM challenges WHERE title = 'Laboratorio de Transformaciones'");
+    if (existing) {
+      await pool.query('DELETE FROM user_progress WHERE challenge_id = $1', [existing.id]);
+      await pool.query("DELETE FROM challenges WHERE id = $1", [existing.id]);
+    }
+    const topic = await qOne("SELECT id FROM topics WHERE name = 'Matrices' LIMIT 1");
+    if (!topic) return res.status(404).json({ error: 'Tema Matrices no encontrado' });
+
+    const content = {
+      intro: 'Descubre que transformacion matricial produce cada efecto visual. Manipula la realidad con matematicas!',
+      levels: [
+        { name: 'Escalado Doble', desc: 'Esta matriz duplica el tamano de la figura en ambas dimensiones. Puedes descubrir sus valores?', matrix: [2,0,0,2], hint: 'Los valores en la diagonal controlan el escalado. Si quieres duplicar, pon 2 en la diagonal.' },
+        { name: 'Reflexion Horizontal', desc: 'Esta matriz crea un efecto espejo: la figura se voltea sobre el eje X.', matrix: [1,0,0,-1], hint: 'Un valor negativo en d invierte el eje Y. El eje X no cambia.' },
+        { name: 'Rotacion 90 grados', desc: 'Esta matriz rota la figura 90 grados en sentido antihorario. Las coordenadas se mezclan.', matrix: [0,-1,1,0], hint: 'En una rotacion de 90 grados: x nuevo es -y, y nuevo es x. Asi: a=0, b=-1, c=1, d=0' },
+        { name: 'Cizalladura Shear', desc: 'Esta matriz inclina la figura. Convierte un rectangulo en un paralelogramo.', matrix: [1,1,0,1], hint: 'La cizalladura usa un valor fuera de la diagonal. Prueba b=1 manteniendo el resto como identidad.' },
+        { name: 'Escalado No Uniforme', desc: 'Esta matriz estira en X y aplana en Y. Los ejes escalan de forma diferente!', matrix: [2,0,0,0.5], hint: 'Puedes escalar cada eje de forma independiente usando distintos valores en la diagonal.' }
+      ]
+    };
+
+    const maxRow = await qOne('SELECT MAX(order_index) as m FROM challenges WHERE topic_id = $1', [topic.id]);
+    await pool.query(
+      'INSERT INTO challenges (topic_id, title, description, type, content, order_index) VALUES ($1,$2,$3,$4,$5,$6)',
+      [topic.id, 'Laboratorio de Transformaciones', 'Descubre el poder visual de las matrices manipulando formas geometricas en tiempo real', 'transform_game', JSON.stringify(content), (maxRow.m || 5) + 1]
+    );
+    res.json({ success: true, message: 'Desafio insertado correctamente' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── START ────────────────────────────────────────────────────────────────────
 initDb()
   .then(() => {
