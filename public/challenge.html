@@ -66,7 +66,7 @@
 
 <script src="js/api.js"></script>
 <script>
-const TYPE_LABELS = { quiz: '🧠 Test', fill_blank: '✏️ Cálculo', matching: '🔗 Relacionar', transform_game: '🎮 Juego Visual' };
+const TYPE_LABELS = { quiz: '🧠 Test', fill_blank: '✏️ Cálculo', matching: '🔗 Relacionar', transform_game: '🎮 Juego Visual', slope_hunter: '🎯 Cazador' };
 let challengeId, challengeData, startTime, timerInterval;
 
 // Quiz state
@@ -127,6 +127,9 @@ function renderChallenge() {
   } else if (type === 'transform_game') {
     body.innerHTML = buildTransformGame(content);
     initTransformGame(content);
+  } else if (type === 'slope_hunter') {
+    body.innerHTML = buildSlopeHunter(content);
+    initSlopeHunter(content);
   } else {
     body.innerHTML = '<p class="error-msg">Tipo de desafío desconocido</p>';
   }
@@ -410,6 +413,7 @@ function retryChallenge() {
   document.getElementById('result-modal').classList.add('hidden');
   qIndex = 0; quizAnswers = []; selectedLeft = null; matchedCount = 0; matchResults = []; fillSubmitted = false;
   tgState = { ...tgState, levelIndex: 0, animating: false };
+  sgState = { ...sgState, levelIndex: 0, lives: 3 };
   renderChallenge();
   startTimer();
 }
@@ -683,6 +687,295 @@ function tgFinish() {
   const total=tgState.starsPerLevel.reduce((a,b)=>a+b,0);
   const max=tgState.content.levels.length*3;
   submitResult(Math.round((total/max)*100));
+}
+
+// ─────────────────── SLOPE HUNTER ────────────────────────────────────────────
+
+const SG_FUNCS = {
+  parabola_neg:   { f: x => -x*x+4,            df: x => -2*x },
+  cubic_classic:  { f: x => x*x*x-3*x,         df: x => 3*x*x-3 },
+  quartic_double: { f: x => x*x*x*x-4*x*x,     df: x => 4*x*x*x-8*x },
+  cubic_optim:    { f: x => x*x*x-6*x*x+9*x,   df: x => 3*x*x-12*x+9 },
+  sine:           { f: Math.sin,                df: Math.cos },
+};
+
+let sgState = {
+  content: null, levelIndex: 0, lives: 3,
+  found: [], wrongPerCrit: [], yRange: null,
+  levelScores: [], particles: [], stars: [],
+  mouseWX: null,
+};
+
+function buildSlopeHunter(c) {
+  return `
+  <div class="slope-game">
+    <div class="sg-top">
+      <div class="sg-prog" id="sg-prog"></div>
+      <div class="sg-lives" id="sg-lives">❤️❤️❤️</div>
+    </div>
+    <div class="sg-level-header">
+      <div class="sg-level-num" id="sg-levelnum"></div>
+      <div class="sg-level-name" id="sg-levelname"></div>
+    </div>
+    <div class="sg-formula-box" id="sg-formula"></div>
+    <div class="sg-found-bar" id="sg-found-bar"></div>
+    <div class="sg-canvas-wrap">
+      <canvas id="sg-canvas" width="560" height="360"></canvas>
+      <div class="sg-slope-row">
+        <span class="sg-slope-label">f'(x) = pendiente:</span>
+        <span class="sg-slope-val" id="sg-slope-val">mueve el ratón →</span>
+      </div>
+    </div>
+    <div class="sg-instruction">
+      🖱️ Mueve el ratón sobre la gráfica · Cuando la pendiente esté cerca de <strong>0</strong> (recta horizontal) · ¡Haz clic!
+    </div>
+    <div style="padding:0 24px 16px;display:flex;gap:8px;align-items:flex-start;flex-direction:column;">
+      <button class="btn btn-ghost btn-sm" onclick="sgHint()">💡 Pista</button>
+      <div class="sg-hint-box hidden" id="sg-hint-box"></div>
+    </div>
+    <div class="sg-next-wrap hidden" id="sg-next-wrap">
+      <button class="btn btn-success btn-lg" onclick="sgNextLevel()">Siguiente nivel →</button>
+    </div>
+  </div>`;
+}
+
+function initSlopeHunter(content) {
+  sgState.content = content;
+  sgState.levelIndex = 0;
+  sgState.lives = 3;
+  sgState.levelScores = new Array(content.levels.length).fill(0);
+  document.getElementById('sg-prog').innerHTML =
+    content.levels.map((_,i) => `<div class="tg-dot" id="sgdot-${i}"></div>`).join('');
+  sgLoad();
+}
+
+function sgLevel()  { return sgState.content.levels[sgState.levelIndex]; }
+function sgFn()     { return SG_FUNCS[sgLevel().fType]; }
+
+function sgYRange(f, xr) {
+  let mn=Infinity, mx=-Infinity;
+  for (let x=xr[0]; x<=xr[1]; x+=0.02) {
+    const y=f(x); if(isFinite(y)){mn=Math.min(mn,y);mx=Math.max(mx,y);}
+  }
+  const pad=Math.max((mx-mn)*0.28,0.5);
+  return [mn-pad, mx+pad];
+}
+
+function sgLoad() {
+  const lv=sgLevel(), i=sgState.levelIndex, n=sgState.content.levels.length;
+  sgState.found         = new Array(lv.criticals.length).fill(false);
+  sgState.wrongPerCrit  = new Array(lv.criticals.length).fill(0);
+  sgState.particles     = [];
+  sgState.stars         = [];
+  sgState.mouseWX       = null;
+  sgState.yRange        = sgYRange(sgFn().f, lv.xRange);
+
+  document.getElementById('sg-levelnum').textContent  = `Nivel ${i+1} de ${n}`;
+  document.getElementById('sg-levelname').textContent = lv.name;
+  document.getElementById('sg-formula').textContent   = lv.desc;
+  document.getElementById('sg-found-bar').textContent = `Encontrados: 0 / ${lv.criticals.length}`;
+  document.getElementById('sg-slope-val').textContent = 'mueve el ratón →';
+  document.getElementById('sg-slope-val').className   = 'sg-slope-val';
+  document.getElementById('sg-next-wrap').classList.add('hidden');
+  document.getElementById('sg-hint-box').classList.add('hidden');
+
+  for (let j=0; j<n; j++) {
+    const d=document.getElementById(`sgdot-${j}`);
+    if(d) d.className='tg-dot'+(j<i?' tg-dot-done':j===i?' tg-dot-active':'');
+  }
+  sgUpdateLives();
+
+  const cv=document.getElementById('sg-canvas');
+  if (!cv) return;
+  cv.onmousemove  = e => { sgState.mouseWX=sgEvtX(e);  sgDraw(); };
+  cv.onclick      = e => { sgClick(sgEvtX(e)); };
+  cv.onmouseleave = () => { sgState.mouseWX=null; sgDraw(); document.getElementById('sg-slope-val').textContent='mueve el ratón →'; document.getElementById('sg-slope-val').className='sg-slope-val'; };
+  cv.ontouchmove  = e => { e.preventDefault(); sgState.mouseWX=sgEvtX(e.touches[0]); sgDraw(); };
+  cv.ontouchend   = e => { e.preventDefault(); sgClick(sgEvtX(e.changedTouches[0])); };
+
+  sgDraw();
+}
+
+function sgUpdateLives() {
+  document.getElementById('sg-lives').textContent =
+    '❤️'.repeat(sgState.lives) + '🖤'.repeat(Math.max(0,3-sgState.lives));
+}
+
+function sgScale() {
+  const lv=sgLevel(), xr=lv.xRange, yr=sgState.yRange, W=560, H=360;
+  const toC=(wx,wy)=>[(wx-xr[0])/(xr[1]-xr[0])*W, H-(wy-yr[0])/(yr[1]-yr[0])*H];
+  const toW=(cx,cy)=>[cx/(W/(xr[1]-xr[0]))+xr[0], (H-cy)/(H/(yr[1]-yr[0]))+yr[0]];
+  return {xr,yr,W,H,toC,toW};
+}
+
+function sgEvtX(e) {
+  const cv=document.getElementById('sg-canvas'); if(!cv)return null;
+  const r=cv.getBoundingClientRect(), scx=cv.width/r.width;
+  const cx=(e.clientX-r.left)*scx;
+  const {xr,W}=sgScale();
+  return cx/W*(xr[1]-xr[0])+xr[0];
+}
+
+function sgDraw() {
+  const cv=document.getElementById('sg-canvas'); if(!cv)return;
+  const ctx=cv.getContext('2d');
+  const {xr,yr,W,H,toC}=sgScale();
+  const fn=sgFn();
+
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#fafafa'; ctx.fillRect(0,0,W,H);
+
+  // Grid
+  ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=1;
+  const xStep=Math.max(1,Math.round((xr[1]-xr[0])/8));
+  const yStep=Math.max(1,Math.round((yr[1]-yr[0])/6));
+  for(let gx=Math.ceil(xr[0]);gx<=xr[1];gx+=xStep){
+    const[cx]=toC(gx,0);ctx.beginPath();ctx.moveTo(cx,0);ctx.lineTo(cx,H);ctx.stroke();
+    ctx.fillStyle='#d1d5db';ctx.font='11px sans-serif';
+    const[,cy0]=toC(0,0);ctx.fillText(gx,cx+2,Math.min(H-4,Math.max(14,(isFinite(cy0)?cy0:H/2)+14)));
+  }
+  for(let gy=Math.ceil(yr[0]);gy<=yr[1];gy+=yStep){
+    const[,cy]=toC(0,gy);ctx.beginPath();ctx.moveTo(0,cy);ctx.lineTo(W,cy);ctx.stroke();
+    if(gy!==0){ctx.fillStyle='#d1d5db';ctx.font='11px sans-serif';
+    const[cx0]=toC(0,0);ctx.fillText(gy,Math.max(2,Math.min(W-22,(isFinite(cx0)?cx0:0)+4)),cy-2);}
+  }
+
+  // Axes
+  const[ax,ay]=toC(0,0);
+  ctx.strokeStyle='#9ca3af';ctx.lineWidth=2;
+  if(isFinite(ay)&&ay>=0&&ay<=H){ctx.beginPath();ctx.moveTo(0,ay);ctx.lineTo(W,ay);ctx.stroke();}
+  if(isFinite(ax)&&ax>=0&&ax<=W){ctx.beginPath();ctx.moveTo(ax,0);ctx.lineTo(ax,H);ctx.stroke();}
+  ctx.fillStyle='#6b7280';ctx.font='bold 12px sans-serif';
+  ctx.fillText('x',W-12,isFinite(ay)?Math.min(H-4,Math.max(14,ay-4)):H-4);
+  ctx.fillText('y',isFinite(ax)?Math.max(4,ax+4):4,14);
+
+  // Curve
+  ctx.beginPath();ctx.strokeStyle='#7c3aed';ctx.lineWidth=3;
+  let started=false;
+  for(let px=0;px<=W;px+=1.5){
+    const wx=px/W*(xr[1]-xr[0])+xr[0];
+    const wy=fn.f(wx);
+    if(!isFinite(wy)||wy<yr[0]-2||wy>yr[1]+2){started=false;continue;}
+    const[cx,cy]=toC(wx,wy);
+    started?ctx.lineTo(cx,cy):ctx.moveTo(cx,cy);started=true;
+  }
+  ctx.stroke();
+
+  // Found stars
+  sgState.stars.forEach(s=>{
+    const[cx,cy]=toC(s.x,fn.f(s.x));
+    ctx.font='24px serif';ctx.fillText('⭐',cx-12,cy+9);
+  });
+
+  // Tangent line + cursor dot
+  const wx=sgState.mouseWX;
+  if(wx!==null&&isFinite(wx)&&wx>=xr[0]&&wx<=xr[1]){
+    const wy=fn.f(wx), slope=fn.df(wx);
+    if(isFinite(slope)&&isFinite(wy)){
+      const ext=1.8;
+      const[c1x,c1y]=toC(wx-ext, wy+slope*(-ext));
+      const[c2x,c2y]=toC(wx+ext, wy+slope*(ext));
+      const abs=Math.abs(slope);
+      const col=abs<0.12?'#10b981':abs<0.45?'#84cc16':abs<1.2?'#f59e0b':'#ef4444';
+      ctx.strokeStyle=col;ctx.lineWidth=2.5;ctx.setLineDash([7,4]);
+      ctx.beginPath();ctx.moveTo(c1x,c1y);ctx.lineTo(c2x,c2y);ctx.stroke();
+      ctx.setLineDash([]);
+      const[cmx,cmy]=toC(wx,wy);
+      ctx.fillStyle=col;ctx.beginPath();ctx.arc(cmx,cmy,7,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();
+
+      // Update slope display
+      const sv=document.getElementById('sg-slope-val');
+      sv.textContent=slope.toFixed(3)+(abs<0.12?' ← ¡AHORA!':abs<0.45?' ← cerca':'');
+      sv.className='sg-slope-val '+(abs<0.12?'sg-zero':abs<0.45?'sg-warm':'sg-hot');
+    }
+  }
+
+  // Particles
+  sgState.particles.forEach(p=>{
+    ctx.globalAlpha=Math.max(0,p.life);
+    ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+  });ctx.globalAlpha=1;
+}
+
+function sgClick(wx) {
+  if(!isFinite(wx))return;
+  const lv=sgLevel(), fn=sgFn();
+  const tol=(lv.xRange[1]-lv.xRange[0])*0.08;
+
+  let hit=-1;
+  lv.criticals.forEach((cx,i)=>{ if(!sgState.found[i]&&Math.abs(wx-cx)<tol) hit=i; });
+
+  if(hit>=0){
+    sgState.found[hit]=true;
+    const cx=lv.criticals[hit];
+    sgState.stars.push({x:cx});
+    sgBurst(cx,fn.f(cx));
+    const done=sgState.found.filter(Boolean).length;
+    document.getElementById('sg-found-bar').textContent=`Encontrados: ${done} / ${lv.criticals.length}`;
+    if(done===lv.criticals.length) setTimeout(sgLevelDone,900);
+  } else {
+    sgState.lives--;sgUpdateLives();
+    // Red flash
+    const cv=document.getElementById('sg-canvas');
+    if(cv){
+      const ctx=cv.getContext('2d'),{toC,H}=sgScale();
+      const[cx]=toC(wx,0);
+      ctx.globalAlpha=0.28;ctx.fillStyle='#ef4444';
+      ctx.fillRect(Math.max(0,cx-25),0,50,H);ctx.globalAlpha=1;
+      setTimeout(()=>sgDraw(),300);
+    }
+    if(sgState.lives<=0) setTimeout(sgEndEarly,400);
+  }
+}
+
+function sgBurst(wx,wy){
+  const{toC}=sgScale();
+  const[cx,cy]=toC(wx,wy);
+  const cols=['#7c3aed','#10b981','#f59e0b','#f472b6','#0ea5e9','#22c55e'];
+  for(let i=0;i<22;i++) sgState.particles.push({
+    x:cx,y:cy,vx:(Math.random()-.5)*9,vy:(Math.random()-.5)*9-3,
+    r:Math.random()*5+3,color:cols[Math.floor(Math.random()*cols.length)],life:1
+  });
+  const t0=Date.now();
+  (function boom(){
+    if(Date.now()-t0>950){sgState.particles=[];sgDraw();return;}
+    sgState.particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.22;p.life-=0.028;});
+    sgDraw();requestAnimationFrame(boom);
+  })();
+}
+
+function sgLevelDone(){
+  const lv=sgLevel();
+  const found=sgState.found.filter(Boolean).length;
+  sgState.levelScores[sgState.levelIndex]=Math.round((found/lv.criticals.length)*75+(sgState.lives/3)*25);
+  document.getElementById(`sgdot-${sgState.levelIndex}`)?.classList.replace('tg-dot-active','tg-dot-done');
+  const isLast=sgState.levelIndex===sgState.content.levels.length-1;
+  isLast?setTimeout(sgFinish,600):document.getElementById('sg-next-wrap').classList.remove('hidden');
+}
+
+function sgEndEarly(){
+  const lv=sgLevel();
+  const found=sgState.found.filter(Boolean).length;
+  sgState.levelScores[sgState.levelIndex]=Math.round((found/lv.criticals.length)*75);
+  sgFinish();
+}
+
+function sgNextLevel(){
+  sgState.levelIndex++;
+  sgState.lives=Math.min(3,sgState.lives+1);
+  sgLoad();
+}
+
+function sgHint(){
+  const h=document.getElementById('sg-hint-box');
+  h.textContent='💡 '+sgLevel().hint;
+  h.classList.remove('hidden');
+}
+
+function sgFinish(){
+  const avg=sgState.levelScores.reduce((a,b)=>a+b,0)/sgState.content.levels.length;
+  submitResult(Math.round(avg));
 }
 
 </script>

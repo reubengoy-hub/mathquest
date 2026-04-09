@@ -327,6 +327,39 @@ app.post('/api/admin/seed-transform', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── SEED SLOPE HUNTER ────────────────────────────────────────────────────────
+
+app.post('/api/admin/seed-slope-hunter', requireAdmin, async (req, res) => {
+  try {
+    const TITLE = 'Cazador de Puntos Criticos';
+    const existing = await qOne('SELECT id FROM challenges WHERE title = $1', [TITLE]);
+    if (existing) {
+      await pool.query('DELETE FROM user_progress WHERE challenge_id = $1', [existing.id]);
+      await pool.query('DELETE FROM challenges WHERE id = $1', [existing.id]);
+    }
+    const topic = await qOne("SELECT id FROM topics WHERE name = 'Derivadas' LIMIT 1");
+    if (!topic) return res.status(404).json({ error: 'Tema Derivadas no encontrado' });
+
+    const content = {
+      intro: 'Usa la recta tangente para cazar los puntos criticos. Donde la pendiente es 0, hay un maximo o minimo!',
+      levels: [
+        { name: 'Parabola', desc: 'f(x) = -x2 + 4', fType: 'parabola_neg', criticals: [0], xRange: [-3, 3], hint: 'La derivada es f\'(x) = -2x. Vale 0 cuando x = 0. Busca donde la tangente sea horizontal.' },
+        { name: 'Cubica Clasica', desc: 'f(x) = x3 - 3x', fType: 'cubic_classic', criticals: [-1, 1], xRange: [-2.5, 2.5], hint: 'f\'(x) = 3x2 - 3 = 0 implica x2 = 1, es decir x = +1 y x = -1. Hay 2 puntos criticos.' },
+        { name: 'Doble Valle', desc: 'f(x) = x4 - 4x2', fType: 'quartic_double', criticals: [-1.414, 0, 1.414], xRange: [-2.5, 2.5], hint: 'f\'(x) = 4x(x2-2) = 0. Tres puntos: x = 0 y x = mas/menos raiz de 2 (aprox 1.41 y -1.41).' },
+        { name: 'Optimizacion', desc: 'f(x) = x3 - 6x2 + 9x', fType: 'cubic_optim', criticals: [1, 3], xRange: [-0.5, 4.5], hint: 'f\'(x) = 3x2 - 12x + 9 = 3(x-1)(x-3) = 0. Dos puntos criticos en x = 1 y x = 3.' },
+        { name: 'Funcion Seno', desc: 'f(x) = sin(x)', fType: 'sine', criticals: [-1.5708, 1.5708], xRange: [-3.1416, 3.1416], hint: 'f\'(x) = cos(x) = 0 cuando x = pi/2 o x = -pi/2, es decir aproximadamente 1.57 y -1.57.' }
+      ]
+    };
+
+    const maxRow = await qOne('SELECT MAX(order_index) as m FROM challenges WHERE topic_id = $1', [topic.id]);
+    await pool.query(
+      'INSERT INTO challenges (topic_id, title, description, type, content, order_index) VALUES ($1,$2,$3,$4,$5,$6)',
+      [topic.id, TITLE, 'Encuentra los maximos y minimos usando la recta tangente en tiempo real', 'slope_hunter', JSON.stringify(content), (maxRow.m || 5) + 1]
+    );
+    res.json({ success: true, message: 'Cazador de Puntos Criticos insertado correctamente' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── START ────────────────────────────────────────────────────────────────────
 initDb()
   .then(() => {

@@ -665,3 +665,27 @@ tr:hover td { background: var(--bg); }
   .tg-layout { flex-direction: column; align-items: center; }
   #tg-canvas { width: 300px; height: 300px; }
 }
+
+/* ── SLOPE HUNTER ────────────────────────────────────────────────────────── */
+.slope-game { background: white; border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.sg-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--border); }
+.sg-prog { display: flex; gap: 8px; }
+.sg-lives { font-size: 1.2rem; letter-spacing: 2px; }
+.sg-level-header { padding: 14px 24px 4px; }
+.sg-level-num { font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.sg-level-name { font-size: 1.2rem; font-weight: 800; color: var(--text); }
+.sg-formula-box { margin: 6px 24px 8px; display: inline-block; background: var(--primary-light); color: var(--primary); font-family: 'Courier New', monospace; font-size: 1.05rem; font-weight: 700; padding: 7px 16px; border-radius: var(--radius-sm); }
+.sg-found-bar { padding: 0 24px 8px; font-size: 0.88rem; font-weight: 700; color: var(--success); }
+.sg-canvas-wrap { padding: 0 24px; }
+#sg-canvas { border-radius: var(--radius-sm); border: 2px solid var(--border); cursor: crosshair; max-width: 100%; display: block; }
+.sg-slope-row { display: flex; align-items: center; gap: 10px; padding: 8px 0 2px; font-size: 0.9rem; }
+.sg-slope-label { color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+.sg-slope-val { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text-muted); transition: color 0.15s; }
+.sg-slope-val.sg-zero { color: var(--success); animation: sg-pulse 0.5s infinite alternate; }
+.sg-slope-val.sg-warm { color: #84cc16; }
+.sg-slope-val.sg-hot  { color: #ef4444; }
+@keyframes sg-pulse { from { opacity:.65; } to { opacity:1; transform:scale(1.06); } }
+.sg-instruction { padding: 4px 24px 12px; font-size: 0.87rem; color: var(--text-muted); line-height: 1.6; }
+.sg-hint-box { background: #fffbeb; border: 1.5px solid var(--warning); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 0.85rem; color: #78350f; line-height: 1.5; }
+.sg-next-wrap { padding: 0 24px 24px; display: flex; justify-content: flex-end; }
+@media (max-width: 620px) { #sg-canvas { height: auto; } .sg-canvas-wrap { padding: 0 12px; } }
