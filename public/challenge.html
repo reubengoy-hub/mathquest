@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MathQuest — Desafío</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a class="navbar-brand" href="/dashboard.html">
+    <div class="logo-icon">∑</div>
+    MathQuest
+  </a>
+  <div class="navbar-user">
+    <span class="navbar-username" id="nav-username"></span>
+    <button class="btn btn-ghost btn-sm" id="logout-btn">Salir</button>
+  </div>
+</nav>
+
+<div class="challenge-wrapper">
+  <div class="challenge-topbar">
+    <a href="/dashboard.html" class="btn btn-ghost btn-sm">← Volver</a>
+    <div class="timer-display" id="timer">00:00</div>
+  </div>
+
+  <div id="challenge-header" class="challenge-header">
+    <div class="challenge-type-badge" id="type-badge">Cargando...</div>
+    <h2 id="challenge-title">Cargando desafío...</h2>
+    <p id="challenge-desc"></p>
+  </div>
+
+  <div id="challenge-body"></div>
+</div>
+
+<!-- Result Modal -->
+<div id="result-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div id="score-circle" class="score-circle">
+      <span class="score-num" id="score-num">0</span>
+      <span class="score-pct">%</span>
+    </div>
+    <h3 id="result-title"></h3>
+    <p id="result-msg"></p>
+    <div class="modal-stats">
+      <div class="modal-stat">
+        <div class="stat-val" id="stat-time">—</div>
+        <div class="stat-lbl">Tiempo</div>
+      </div>
+      <div class="modal-stat">
+        <div class="stat-val" id="stat-attempts">—</div>
+        <div class="stat-lbl">Intentos</div>
+      </div>
+      <div class="modal-stat">
+        <div class="stat-val" id="stat-best">—</div>
+        <div class="stat-lbl">Mejor</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="window.location.href='/dashboard.html'">← Volver</button>
+      <button class="btn btn-primary" onclick="retryChallenge()">Reintentar</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+const TYPE_LABELS = { quiz: '🧠 Test', fill_blank: '✏️ Cálculo', matching: '🔗 Relacionar' };
+let challengeId, challengeData, startTime, timerInterval;
+
+// Quiz state
+let qIndex = 0, quizAnswers = [];
+// Matching state
+let selectedLeft = null, matchedCount = 0, matchResults = [];
+// Fill state
+let fillSubmitted = false;
+
+(async () => {
+  const me = await checkAuth(false);
+  if (!me) return;
+  document.getElementById('nav-username').textContent = me.username;
+  setupLogout();
+
+  const params = new URLSearchParams(location.search);
+  challengeId = params.get('id');
+  if (!challengeId) return (location.href = '/dashboard.html');
+
+  try {
+    challengeData = await API.get(`/api/challenges/${challengeId}`);
+    renderChallenge();
+    startTimer();
+  } catch (e) {
+    document.getElementById('challenge-body').innerHTML = `<p class="error-msg">${e.message}</p>`;
+  }
+})();
+
+function startTimer() {
+  startTime = Date.now();
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - startTime) / 1000);
+    const m = Math.floor(s / 60), sec = s % 60;
+    document.getElementById('timer').textContent =
+      `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  }, 500);
+}
+
+function elapsedSeconds() {
+  return Math.floor((Date.now() - startTime) / 1000);
+}
+
+function renderChallenge() {
+  const { title, description, type, content } = challengeData;
+  document.title = `MathQuest — ${title}`;
+  document.getElementById('challenge-title').textContent = title;
+  document.getElementById('challenge-desc').textContent = description || '';
+  document.getElementById('type-badge').textContent = TYPE_LABELS[type] || type;
+
+  const body = document.getElementById('challenge-body');
+  if (type === 'quiz') {
+    body.innerHTML = buildQuiz(content);
+    showQuestion(0);
+  } else if (type === 'fill_blank') {
+    body.innerHTML = buildFillBlank(content);
+  } else if (type === 'matching') {
+    body.innerHTML = buildMatching(content);
+  } else {
+    body.innerHTML = '<p class="error-msg">Tipo de desafío desconocido</p>';
+  }
+}
+
+// ─────────────────────────── QUIZ ───────────────────────────────────────────
+
+function buildQuiz(c) {
+  quizAnswers = new Array(c.questions.length).fill(null);
+  return `
+    <div class="quiz-container">
+      <div class="quiz-progress">
+        <div class="progress-bar" style="flex:1">
+          <div class="progress-fill" id="q-bar" style="width:${100/c.questions.length}%"></div>
+        </div>
+        <span id="q-counter">Pregunta 1 de ${c.questions.length}</span>
+      </div>
+      <div class="question-area" id="question-area"></div>
+      <div class="quiz-footer">
+        <button class="btn btn-primary hidden" id="next-btn" onclick="nextQuestion()">
+          Siguiente →
+        </button>
+        <button class="btn btn-success hidden" id="finish-btn" onclick="finishQuiz()">
+          Ver resultado
+        </button>
+      </div>
+    </div>`;
+}
+
+function showQuestion(idx) {
+  const c = challengeData.content;
+  const q = c.questions[idx];
+  const letters = ['A','B','C','D','E'];
+  document.getElementById('q-counter').textContent = `Pregunta ${idx+1} de ${c.questions.length}`;
+  document.getElementById('q-bar').style.width = `${((idx+1) / c.questions.length) * 100}%`;
+  document.getElementById('next-btn').classList.add('hidden');
+  document.getElementById('finish-btn').classList.add('hidden');
+
+  document.getElementById('question-area').innerHTML = `
+    <div class="question-text">${q.q}</div>
+    <div class="options-list">
+      ${q.opts.map((o, i) => `
+        <button class="option-btn" onclick="selectOption(${idx}, ${i})">
+          <span class="option-letter">${letters[i]}</span>
+          ${o}
+        </button>`).join('')}
+    </div>
+    <div id="explanation" class="hidden"></div>`;
+}
+
+function selectOption(qIdx, optIdx) {
+  if (quizAnswers[qIdx] !== null) return;
+  const q = challengeData.content.questions[qIdx];
+  quizAnswers[qIdx] = optIdx;
+  const correct = optIdx === q.ans;
+
+  document.querySelectorAll('.option-btn').forEach((btn, i) => {
+    btn.disabled = true;
+    if (i === q.ans) btn.classList.add('correct');
+    else if (i === optIdx && !correct) btn.classList.add('wrong');
+  });
+
+  const expEl = document.getElementById('explanation');
+  expEl.className = `explanation-box ${correct ? '' : 'wrong'}`;
+  expEl.textContent = (correct ? '✓ ' : '✗ ') + (q.explain || (correct ? '¡Correcto!' : 'Incorrecto.'));
+  expEl.classList.remove('hidden');
+
+  const isLast = qIdx === challengeData.content.questions.length - 1;
+  if (isLast) document.getElementById('finish-btn').classList.remove('hidden');
+  else document.getElementById('next-btn').classList.remove('hidden');
+}
+
+function nextQuestion() {
+  qIndex++;
+  showQuestion(qIndex);
+}
+
+function finishQuiz() {
+  const correct = quizAnswers.filter((a, i) => a === challengeData.content.questions[i].ans).length;
+  const score = Math.round((correct / challengeData.content.questions.length) * 100);
+  submitResult(score);
+}
+
+// ─────────────────────────── FILL BLANK ─────────────────────────────────────
+
+function buildFillBlank(c) {
+  return `
+    <div class="fill-container">
+      <div class="fill-intro">
+        <p>${c.intro}</p>
+        ${c.context ? `<pre class="fill-context">${c.context}</pre>` : ''}
+      </div>
+      <div class="fill-problems">
+        ${c.problems.map((p, i) => `
+          <div class="fill-problem" id="fp-${i}">
+            <label>${i+1}. ${p.q}</label>
+            ${p.hint ? `<div class="hint">Pista: ${p.hint}</div>` : ''}
+            <div class="fill-answer-row">
+              <input type="text" id="fa-${i}" placeholder="Tu respuesta..." autocomplete="off">
+              <span id="fi-${i}"></span>
+            </div>
+            <div class="fill-feedback" id="ff-${i}"></div>
+          </div>`).join('')}
+      </div>
+      <div class="fill-footer">
+        <span id="fill-score-info" style="font-size:0.9rem;color:var(--text-muted)"></span>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-secondary" id="check-btn" onclick="checkFill()">Comprobar</button>
+          <button class="btn btn-success hidden" id="submit-fill-btn" onclick="submitFill()">Enviar resultado</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function checkAnswer(user, correct) {
+  const u = user.trim();
+  const c = correct.toString().trim();
+  const uN = parseFloat(u), cN = parseFloat(c);
+  if (!isNaN(uN) && !isNaN(cN)) return Math.abs(uN - cN) < 0.01;
+  return u.toLowerCase() === c.toLowerCase();
+}
+
+function checkFill() {
+  const problems = challengeData.content.problems;
+  let correct = 0;
+  problems.forEach((p, i) => {
+    const val = document.getElementById(`fa-${i}`)?.value || '';
+    const ok = checkAnswer(val, p.ans);
+    if (ok) correct++;
+    const fp = document.getElementById(`fp-${i}`);
+    const inp = document.getElementById(`fa-${i}`);
+    const fb = document.getElementById(`ff-${i}`);
+    fp.className = `fill-problem ${ok ? 'correct' : 'wrong'}`;
+    inp.className = ok ? 'correct' : 'wrong';
+    fb.className = `fill-feedback ${ok ? 'correct' : 'wrong'}`;
+    fb.textContent = ok ? '✓ ¡Correcto!' : `✗ La respuesta correcta es: ${p.ans}`;
+  });
+  const score = Math.round((correct / problems.length) * 100);
+  document.getElementById('fill-score-info').textContent = `${correct}/${problems.length} correctas`;
+  document.getElementById('submit-fill-btn').classList.remove('hidden');
+  document.getElementById('check-btn').classList.add('hidden');
+  fillSubmitted = true;
+  // auto-submit
+  setTimeout(() => submitFill(score), 100);
+}
+
+function submitFill() {
+  const problems = challengeData.content.problems;
+  let correct = 0;
+  problems.forEach((p, i) => {
+    const val = document.getElementById(`fa-${i}`)?.value || '';
+    if (checkAnswer(val, p.ans)) correct++;
+  });
+  const score = Math.round((correct / problems.length) * 100);
+  submitResult(score);
+}
+
+// ─────────────────────────── MATCHING ───────────────────────────────────────
+
+function buildMatching(c) {
+  const shuffled = [...c.pairs].map((p, i) => ({ ...p, origIdx: i }));
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  matchResults = new Array(c.pairs.length).fill(null); // null = unmatched, true/false = result
+
+  const leftHtml = c.pairs.map((p, i) =>
+    `<div class="match-item" id="ml-${i}" onclick="clickLeft(${i})">${p.left}</div>`
+  ).join('');
+  const rightHtml = shuffled.map((p, i) =>
+    `<div class="match-item" id="mr-${i}" data-orig="${p.origIdx}" onclick="clickRight(${i})">${p.right}</div>`
+  ).join('');
+
+  return `
+    <div class="matching-container">
+      <div class="matching-intro"><p>${c.intro}</p></div>
+      <div class="matching-grid">
+        <div class="matching-col">
+          <h4>Función / Concepto</h4>
+          ${leftHtml}
+        </div>
+        <div class="matching-col">
+          <h4>Definición / Resultado</h4>
+          ${rightHtml}
+        </div>
+      </div>
+      <div class="matching-footer">
+        <span class="matching-score-info" id="match-info">Selecciona un elemento de la izquierda</span>
+        <button class="btn btn-success hidden" id="submit-match-btn" onclick="submitMatch()">Ver resultado</button>
+      </div>
+    </div>`;
+}
+
+function clickLeft(idx) {
+  const el = document.getElementById(`ml-${idx}`);
+  if (el.classList.contains('matched')) return;
+  document.querySelectorAll('.matching-col .match-item').forEach(e => e.classList.remove('selected'));
+  if (selectedLeft === idx) { selectedLeft = null; return; }
+  el.classList.add('selected');
+  selectedLeft = idx;
+  document.getElementById('match-info').textContent = 'Ahora selecciona su pareja de la derecha';
+}
+
+function clickRight(idx) {
+  const el = document.getElementById(`mr-${idx}`);
+  if (el.classList.contains('matched') || selectedLeft === null) return;
+
+  const origIdx = parseInt(el.dataset.orig);
+  const correct = origIdx === selectedLeft;
+
+  if (correct) {
+    el.classList.add('matched');
+    const leftEl = document.getElementById(`ml-${selectedLeft}`);
+    leftEl.classList.remove('selected');
+    leftEl.classList.add('matched');
+    matchResults[selectedLeft] = true;
+    matchedCount++;
+
+    const total = challengeData.content.pairs.length;
+    document.getElementById('match-info').textContent = `${matchedCount}/${total} emparejados`;
+
+    if (matchedCount === total) {
+      document.getElementById('submit-match-btn').classList.remove('hidden');
+      document.getElementById('match-info').textContent = '¡Todos emparejados! Haz clic en Ver resultado.';
+    }
+    selectedLeft = null;
+  } else {
+    el.classList.add('wrong-flash');
+    document.getElementById(`ml-${selectedLeft}`)?.classList.add('wrong-flash');
+    setTimeout(() => {
+      el.classList.remove('wrong-flash');
+      document.getElementById(`ml-${selectedLeft}`)?.classList.remove('wrong-flash');
+      document.getElementById(`ml-${selectedLeft}`)?.classList.remove('selected');
+    }, 400);
+    selectedLeft = null;
+    document.getElementById('match-info').textContent = 'Incorrecto, intenta de nuevo';
+  }
+}
+
+function submitMatch() {
+  const total = challengeData.content.pairs.length;
+  const score = Math.round((matchedCount / total) * 100);
+  submitResult(score);
+}
+
+// ─────────────────────────── SUBMIT ─────────────────────────────────────────
+
+async function submitResult(score) {
+  clearInterval(timerInterval);
+  const timeSpent = elapsedSeconds();
+
+  try {
+    const res = await API.post(`/api/challenges/${challengeId}/submit`, { score, timeSpent });
+    showResultModal(score, timeSpent, res.progress);
+  } catch (e) {
+    showResultModal(score, timeSpent, null);
+  }
+}
+
+function showResultModal(score, timeSpent, progress) {
+  const pass = score >= 50;
+  const messages = pass
+    ? ['¡Excelente trabajo!', '¡Lo has conseguido!', '¡Muy bien hecho!', '¡Eres una máquina!']
+    : ['¡Sigue intentándolo!', '¡Casi lo tienes!', 'Puedes mejorar con práctica'];
+  const msg = pass
+    ? '¡Has superado el desafío! Tu puntuación ha sido guardada.'
+    : 'No has alcanzado el mínimo (50%). ¡Puedes volver a intentarlo!';
+
+  document.getElementById('score-num').textContent = score;
+  document.getElementById('score-circle').className = `score-circle ${pass ? 'pass' : 'fail'}`;
+  document.getElementById('result-title').textContent = messages[Math.floor(Math.random() * messages.length)];
+  document.getElementById('result-msg').textContent = msg;
+  document.getElementById('stat-time').textContent = fmtTime(timeSpent);
+  document.getElementById('stat-attempts').textContent = progress?.attempts ?? '—';
+  document.getElementById('stat-best').textContent = progress ? `${Math.round(progress.best_score)}%` : `${score}%`;
+  document.getElementById('result-modal').classList.remove('hidden');
+}
+
+function retryChallenge() {
+  document.getElementById('result-modal').classList.add('hidden');
+  qIndex = 0; quizAnswers = []; selectedLeft = null; matchedCount = 0; matchResults = []; fillSubmitted = false;
+  renderChallenge();
+  startTimer();
+}
+
+// Show first question after build
+document.addEventListener('DOMContentLoaded', () => {
+  // quiz initial render happens via renderChallenge → showQuestion called after build
+});
+
+</script>
+</body>
+</html>

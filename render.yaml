@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: mathquest
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mathquest-db
+          property: connectionString
+
+# OPCIÓN A: Base de datos en Render (gratis 90 días)
+# databases:
+#   - name: mathquest-db
+#     plan: free
+
+# OPCIÓN B (recomendada): Usa Neon.tech gratis (sin límite de tiempo)
+# → En Render, añade manualmente DATABASE_URL con la URL de Neon

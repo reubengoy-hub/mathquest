@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MathQuest — Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a class="navbar-brand" href="/dashboard.html">
+    <div class="logo-icon">∑</div>
+    MathQuest
+  </a>
+  <div class="navbar-user">
+    <span class="navbar-username" id="nav-username"></span>
+    <button class="btn btn-ghost btn-sm" id="logout-btn">Salir</button>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="page-header">
+    <h2 id="greeting">Bienvenido</h2>
+    <p>Elige un tema para comenzar tu aventura matemática</p>
+  </div>
+
+  <!-- Topic → Challenge panel -->
+  <div id="topic-panel" class="hidden" style="margin-bottom:28px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <button class="btn btn-ghost btn-sm" onclick="closeTopicPanel()">← Volver</button>
+      <h3 id="panel-topic-name" style="font-size:1.2rem;"></h3>
+    </div>
+    <div id="challenge-list" class="challenge-list"></div>
+  </div>
+
+  <div id="topics-view">
+    <div id="topics-grid" class="topics-grid"></div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+const ICONS = { quiz: '🧠', fill_blank: '✏️', matching: '🔗' };
+const TYPE_LABELS = { quiz: 'Test', fill_blank: 'Cálculo', matching: 'Relacionar' };
+
+let currentTopicId = null;
+
+(async () => {
+  const me = await checkAuth(false);
+  if (!me) return;
+  document.getElementById('nav-username').textContent = me.username;
+  document.getElementById('greeting').textContent = `¡Hola, ${me.username}! 👋`;
+  setupLogout();
+  loadTopics();
+})();
+
+async function loadTopics() {
+  const topics = await API.get('/api/topics');
+  const grid = document.getElementById('topics-grid');
+  grid.innerHTML = '';
+
+  if (!topics.length) {
+    grid.innerHTML = '<p style="color:var(--text-muted)">No hay temas disponibles aún.</p>';
+    return;
+  }
+
+  topics.forEach(t => {
+    const pct = t.totalChallenges ? Math.round((t.completedChallenges / t.totalChallenges) * 100) : 0;
+    const allDone = t.totalChallenges > 0 && t.completedChallenges === t.totalChallenges;
+    const card = document.createElement('div');
+    card.className = 'topic-card';
+    card.innerHTML = `
+      <div class="topic-card-header">
+        <span class="topic-icon">${t.icon}</span>
+        <h3>${t.name}</h3>
+        <p>${t.description}</p>
+        ${allDone ? '<div class="topic-card-badge">✓ Completado</div>' : ''}
+      </div>
+      <div class="topic-card-footer">
+        <div class="progress-bar-wrap">
+          <div class="progress-label">
+            <span>${t.completedChallenges}/${t.totalChallenges} desafíos</span>
+            <span>${pct}%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill ${allDone ? 'success' : ''}" style="width:${pct}%"></div>
+          </div>
+        </div>
+        ${t.avgScore ? `<div style="font-size:0.82rem;color:var(--text-muted)">Mejor puntuación media: <strong>${t.avgScore}%</strong></div>` : ''}
+      </div>`;
+    card.addEventListener('click', () => openTopic(t));
+    grid.appendChild(card);
+  });
+}
+
+async function openTopic(topic) {
+  currentTopicId = topic.id;
+  document.getElementById('panel-topic-name').textContent = `${topic.icon} ${topic.name}`;
+  document.getElementById('topics-view').classList.add('hidden');
+  document.getElementById('topic-panel').classList.remove('hidden');
+
+  const { challenges } = await API.get(`/api/topics/${topic.id}/challenges`);
+  const list = document.getElementById('challenge-list');
+  list.innerHTML = '';
+
+  challenges.forEach((c, i) => {
+    const p = c.progress;
+    const done = p?.completed === 1;
+    const tried = p && !done;
+    const item = document.createElement('a');
+    item.className = 'challenge-item';
+    item.href = `/challenge.html?id=${c.id}`;
+    item.innerHTML = `
+      <div class="challenge-icon ${c.type}">${ICONS[c.type] || '📝'}</div>
+      <div class="challenge-info">
+        <h4>${i + 1}. ${c.title}</h4>
+        <p>${c.description || TYPE_LABELS[c.type] || 'Desafío'} · ${TYPE_LABELS[c.type]}</p>
+        ${p ? `<p style="margin-top:2px;font-size:0.78rem;">
+          Intentos: ${p.attempts} · Mejor tiempo: ${fmtTime(p.best_time)}
+        </p>` : ''}
+      </div>
+      <div class="challenge-status">
+        ${done
+          ? `<div class="badge badge-success">✓ ${Math.round(p.best_score)}%</div>`
+          : tried
+            ? `<div class="badge badge-warning">${Math.round(p.best_score)}%</div>`
+            : `<div class="badge badge-gray">Pendiente</div>`
+        }
+      </div>`;
+    list.appendChild(item);
+  });
+}
+
+function closeTopicPanel() {
+  document.getElementById('topic-panel').classList.add('hidden');
+  document.getElementById('topics-view').classList.remove('hidden');
+  loadTopics(); // refresh scores
+}
+</script>
+</body>
+</html>

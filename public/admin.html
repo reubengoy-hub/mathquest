@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MathQuest — Admin</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <a class="navbar-brand" href="/admin.html">
+    <div class="logo-icon">∑</div>
+    MathQuest <span style="font-size:0.7rem;background:var(--primary-light);color:var(--primary);padding:2px 8px;border-radius:20px;margin-left:6px;">Admin</span>
+  </a>
+  <div class="navbar-user">
+    <button class="btn btn-ghost btn-sm" id="logout-btn">Salir</button>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="page-header">
+    <h2>Panel de Administración</h2>
+    <p>Gestiona usuarios, temas y desafíos</p>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-grid" id="stats-grid">
+    <div class="stat-card"><div class="stat-card-icon">👥</div><div><div class="stat-card-val" id="s-users">—</div><div class="stat-card-lbl">Usuarios</div></div></div>
+    <div class="stat-card"><div class="stat-card-icon">📚</div><div><div class="stat-card-val" id="s-topics">—</div><div class="stat-card-lbl">Temas</div></div></div>
+    <div class="stat-card"><div class="stat-card-icon">🎯</div><div><div class="stat-card-val" id="s-challenges">—</div><div class="stat-card-lbl">Desafíos</div></div></div>
+    <div class="stat-card"><div class="stat-card-icon">✅</div><div><div class="stat-card-val" id="s-completed">—</div><div class="stat-card-lbl">Completados</div></div></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="admin-tabs">
+    <button class="admin-tab active" onclick="switchAdminTab('users')">Usuarios</button>
+    <button class="admin-tab" onclick="switchAdminTab('topics')">Temas y Desafíos</button>
+  </div>
+
+  <!-- USERS TAB -->
+  <div id="tab-users">
+    <div class="card">
+      <div class="card-header">
+        <span style="font-weight:700;">Progreso de Usuarios</span>
+      </div>
+      <div class="users-table-wrap">
+        <table id="users-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Usuario</th>
+              <th>Último acceso</th>
+              <th>IP</th>
+              <th>Intentados</th>
+              <th>Completados</th>
+              <th>Puntuación media</th>
+              <th>Tiempo total</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOPICS TAB -->
+  <div id="tab-topics" class="hidden">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
+      <button class="btn btn-primary" onclick="openNewTopicModal()">+ Nuevo tema</button>
+    </div>
+    <div class="topic-mgmt-list" id="topic-mgmt-list"></div>
+  </div>
+</div>
+
+<!-- NEW TOPIC MODAL -->
+<div id="modal-topic" class="modal">
+  <div class="modal-box">
+    <h3>Nuevo Tema</h3>
+    <div class="form-group">
+      <label>Nombre del tema *</label>
+      <input type="text" id="new-topic-name" placeholder="Ej: Integrales">
+    </div>
+    <div class="form-group">
+      <label>Descripción</label>
+      <input type="text" id="new-topic-desc" placeholder="Breve descripción">
+    </div>
+    <div class="form-group">
+      <label>Icono (emoji)</label>
+      <input type="text" id="new-topic-icon" placeholder="📚" maxlength="4" value="📚">
+    </div>
+    <div id="modal-topic-error" class="error-msg hidden"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-topic')">Cancelar</button>
+      <button class="btn btn-primary" onclick="createTopic()">Crear tema</button>
+    </div>
+  </div>
+</div>
+
+<!-- NEW CHALLENGE MODAL -->
+<div id="modal-challenge" class="modal">
+  <div class="modal-box" style="max-width:680px;">
+    <h3>Nuevo Desafío (Test)</h3>
+    <div class="form-group">
+      <label>Título *</label>
+      <input type="text" id="new-ch-title" placeholder="Ej: Preguntas básicas">
+    </div>
+    <div class="form-group">
+      <label>Descripción / Introducción</label>
+      <input type="text" id="new-ch-desc" placeholder="Texto introductorio">
+    </div>
+    <div class="question-builder">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <strong>Preguntas</strong>
+        <button class="btn btn-secondary btn-sm" onclick="addQuestion()">+ Añadir pregunta</button>
+      </div>
+      <div id="questions-container"></div>
+    </div>
+    <div id="modal-ch-error" class="error-msg hidden"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-challenge')">Cancelar</button>
+      <button class="btn btn-primary" onclick="createChallenge()">Guardar desafío</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script>
+let currentTopicId = null;
+let questionCount = 0;
+
+(async () => {
+  const me = await checkAuth(true);
+  if (!me) return;
+  setupLogout();
+  loadStats();
+  loadUsers();
+  loadTopics();
+})();
+
+function switchAdminTab(tab) {
+  document.querySelectorAll('.admin-tab').forEach((b, i) => b.classList.toggle('active', (i === 0) === (tab === 'users')));
+  document.getElementById('tab-users').classList.toggle('hidden', tab !== 'users');
+  document.getElementById('tab-topics').classList.toggle('hidden', tab !== 'topics');
+}
+
+async function loadStats() {
+  const s = await API.get('/api/admin/stats');
+  document.getElementById('s-users').textContent = s.totalUsers;
+  document.getElementById('s-topics').textContent = s.totalTopics;
+  document.getElementById('s-challenges').textContent = s.totalChallenges;
+  document.getElementById('s-completed').textContent = s.completedChallenges;
+}
+
+async function loadUsers() {
+  const users = await API.get('/api/admin/users');
+  const tbody = document.getElementById('users-tbody');
+  tbody.innerHTML = '';
+
+  users.forEach(u => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><button class="expand-btn" onclick="toggleDetail('ud-${u.id}', this)">▶</button></td>
+      <td><strong>${u.username}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">Registrado: ${fmtDate(u.created_at)}</span></td>
+      <td>${fmtDate(u.last_login)}</td>
+      <td><code style="font-size:0.8rem;">${u.last_ip || '—'}</code></td>
+      <td>${u.attempted || 0}</td>
+      <td>${u.completed || 0}</td>
+      <td>${u.avg_score ? u.avg_score + '%' : '—'}</td>
+      <td>${fmtTime(u.total_time)}</td>`;
+    tbody.appendChild(row);
+
+    // Detail row
+    const detRow = document.createElement('tr');
+    detRow.id = `ud-${u.id}`;
+    detRow.className = 'user-detail-row hidden';
+    detRow.innerHTML = `<td colspan="8"><div class="user-detail-inner">
+      <strong>Progreso por tema:</strong>
+      <div class="topic-progress-mini">
+        ${u.topicProgress.map(t => `
+          <div class="topic-mini-card">
+            <h5>${t.icon || '📚'} ${t.name}</h5>
+            <div class="progress-bar" style="margin-bottom:6px;">
+              <div class="progress-fill" style="width:${t.total ? Math.round((t.done/t.total)*100) : 0}%"></div>
+            </div>
+            <div style="font-size:0.78rem;color:var(--text-muted)">
+              ${t.done}/${t.total} completados · Media: ${t.avg ? Math.round(t.avg)+'%' : '—'}<br>
+              Tiempo: ${fmtTime(t.time_spent)}
+            </div>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:10px;"><strong>Sesiones recientes:</strong>
+        <div class="session-list">
+          ${u.sessions.map(s => `<span title="${fmtDate(s.login_at)}">${s.ip_address} — ${fmtDate(s.login_at)}</span>`).join('') || '—'}
+        </div>
+      </div>
+    </div></td>`;
+    tbody.appendChild(detRow);
+  });
+
+  if (!users.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:30px;">No hay usuarios registrados aún</td></tr>';
+  }
+}
+
+function toggleDetail(id, btn) {
+  const row = document.getElementById(id);
+  const open = !row.classList.contains('hidden');
+  row.classList.toggle('hidden', open);
+  btn.textContent = open ? '▶' : '▼';
+}
+
+async function loadTopics() {
+  const topics = await API.get('/api/admin/topics');
+  const list = document.getElementById('topic-mgmt-list');
+  list.innerHTML = '';
+
+  topics.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'topic-mgmt-item';
+    item.innerHTML = `
+      <div class="topic-mgmt-header" onclick="toggleTopicChallenges('tc-${t.id}')">
+        <span style="font-size:1.4rem;">${t.icon}</span>
+        <span class="topic-name">${t.name}</span>
+        <span class="badge badge-gray">${t.challenges.length} desafíos</span>
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openNewChallengeModal(${t.id})">+ Desafío</button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteTopic(${t.id},'${t.name}')">🗑</button>
+      </div>
+      <div class="topic-mgmt-challenges hidden" id="tc-${t.id}">
+        ${t.challenges.length === 0 ? '<p style="color:var(--text-muted);font-size:0.9rem;padding:10px 0;">No hay desafíos. Añade el primero.</p>' :
+          t.challenges.map(c => `
+            <div class="challenge-mgmt-item">
+              <span>${c.order_index}. ${c.title} <span class="badge badge-gray" style="margin-left:6px;">${c.type}</span></span>
+              <button class="btn btn-danger btn-sm" onclick="deleteChallenge(${c.id},'${c.title}')">🗑</button>
+            </div>`).join('')}
+      </div>`;
+    list.appendChild(item);
+  });
+
+  if (!topics.length) list.innerHTML = '<p style="color:var(--text-muted)">No hay temas. Crea el primero.</p>';
+}
+
+function toggleTopicChallenges(id) {
+  document.getElementById(id).classList.toggle('hidden');
+}
+
+// ── MODALS ────────────────────────────────────────────────────────────────────
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.querySelectorAll('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m) closeModal(m.id); }));
+
+function openNewTopicModal() {
+  document.getElementById('new-topic-name').value = '';
+  document.getElementById('new-topic-desc').value = '';
+  document.getElementById('new-topic-icon').value = '📚';
+  document.getElementById('modal-topic-error').classList.add('hidden');
+  openModal('modal-topic');
+}
+
+async function createTopic() {
+  const name = document.getElementById('new-topic-name').value.trim();
+  const description = document.getElementById('new-topic-desc').value.trim();
+  const icon = document.getElementById('new-topic-icon').value.trim() || '📚';
+  if (!name) {
+    const el = document.getElementById('modal-topic-error');
+    el.textContent = 'El nombre es obligatorio';
+    el.classList.remove('hidden');
+    return;
+  }
+  try {
+    await API.post('/api/admin/topics', { name, description, icon });
+    closeModal('modal-topic');
+    loadTopics();
+    loadStats();
+  } catch (e) {
+    const el = document.getElementById('modal-topic-error');
+    el.textContent = e.message;
+    el.classList.remove('hidden');
+  }
+}
+
+async function deleteTopic(id, name) {
+  if (!confirm(`¿Eliminar el tema "${name}" y todos sus desafíos?`)) return;
+  await API.delete(`/api/admin/topics/${id}`);
+  loadTopics();
+  loadStats();
+}
+
+function openNewChallengeModal(topicId) {
+  currentTopicId = topicId;
+  questionCount = 0;
+  document.getElementById('new-ch-title').value = '';
+  document.getElementById('new-ch-desc').value = '';
+  document.getElementById('questions-container').innerHTML = '';
+  document.getElementById('modal-ch-error').classList.add('hidden');
+  addQuestion(); // Start with one question
+  openModal('modal-challenge');
+}
+
+function addQuestion() {
+  const idx = questionCount++;
+  const container = document.getElementById('questions-container');
+  const qCard = document.createElement('div');
+  qCard.className = 'question-card';
+  qCard.id = `qcard-${idx}`;
+  qCard.innerHTML = `
+    <div class="question-card-header">
+      <strong>Pregunta ${idx + 1}</strong>
+      <button class="remove-q-btn" onclick="removeQuestion(${idx})">✕ Eliminar</button>
+    </div>
+    <div class="form-group">
+      <label>Enunciado *</label>
+      <input type="text" id="qq-${idx}" placeholder="Escribe la pregunta...">
+    </div>
+    <div id="opts-${idx}">
+      ${[0,1,2,3].map(i => `
+        <div class="option-row">
+          <input type="radio" name="correct-${idx}" value="${i}" ${i===0?'checked':''}>
+          <input type="text" id="qo-${idx}-${i}" placeholder="Opción ${String.fromCharCode(65+i)}">
+        </div>`).join('')}
+    </div>
+    <div class="form-group" style="margin-top:10px;">
+      <label>Explicación (opcional)</label>
+      <input type="text" id="qe-${idx}" placeholder="Explicación de la respuesta correcta">
+    </div>`;
+  container.appendChild(qCard);
+}
+
+function removeQuestion(idx) {
+  document.getElementById(`qcard-${idx}`)?.remove();
+}
+
+async function createChallenge() {
+  const title = document.getElementById('new-ch-title').value.trim();
+  const description = document.getElementById('new-ch-desc').value.trim();
+  const errEl = document.getElementById('modal-ch-error');
+  errEl.classList.add('hidden');
+
+  if (!title) { errEl.textContent = 'El título es obligatorio'; errEl.classList.remove('hidden'); return; }
+
+  const questions = [];
+  document.querySelectorAll('.question-card').forEach(card => {
+    const idx = card.id.replace('qcard-','');
+    const q = document.getElementById(`qq-${idx}`)?.value.trim();
+    if (!q) return;
+    const opts = [0,1,2,3].map(i => document.getElementById(`qo-${idx}-${i}`)?.value.trim() || '').filter(Boolean);
+    if (opts.length < 2) return;
+    const ansRadio = card.querySelector(`input[name="correct-${idx}"]:checked`);
+    const ans = ansRadio ? parseInt(ansRadio.value) : 0;
+    const explain = document.getElementById(`qe-${idx}`)?.value.trim();
+    questions.push({ q, opts, ans, explain });
+  });
+
+  if (!questions.length) { errEl.textContent = 'Añade al menos una pregunta con enunciado y opciones'; errEl.classList.remove('hidden'); return; }
+
+  try {
+    await API.post(`/api/admin/topics/${currentTopicId}/challenges`, { title, description, questions });
+    closeModal('modal-challenge');
+    loadTopics();
+    loadStats();
+  } catch (e) {
+    errEl.textContent = e.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+async function deleteChallenge(id, title) {
+  if (!confirm(`¿Eliminar el desafío "${title}"?`)) return;
+  await API.delete(`/api/admin/challenges/${id}`);
+  loadTopics();
+  loadStats();
+}
+</script>
+</body>
+</html>
