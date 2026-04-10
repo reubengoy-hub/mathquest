@@ -381,6 +381,41 @@ app.post('/api/admin/seed-slope-hunter', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── SEED ROCKET LANDER ───────────────────────────────────────────────────────
+
+app.post('/api/admin/seed-rocket', requireAdmin, async (req, res) => {
+  try {
+    const TITLE = 'Aterrizaje de Precision';
+    const existing = await qOne('SELECT id FROM challenges WHERE title = $1', [TITLE]);
+    if (existing) {
+      await pool.query('DELETE FROM user_progress WHERE challenge_id = $1', [existing.id]);
+      await pool.query('DELETE FROM challenges WHERE id = $1', [existing.id]);
+    }
+    const topic = await qOne("SELECT id FROM topics WHERE name = 'Derivadas' LIMIT 1");
+    if (!topic) return res.status(404).json({ error: 'Tema Derivadas no encontrado' });
+
+    const content = {
+      intro: 'Controla los propulsores de tu nave para aterrizar suavemente. La fisica real: a(t) = empuje - g, v(t) = integral de a, h(t) = integral de v. Cuanto mejor controles la aceleracion, mejor aterrizaras.',
+      levels: [
+        { planet: 'Luna',         gravity: 1.62 },
+        { planet: 'Marte',        gravity: 3.72 },
+        { planet: 'Tierra',       gravity: 9.81 },
+        { planet: 'Io (Jupiter)', gravity: 1.80 },
+        { planet: 'Venus',        gravity: 8.87 }
+      ]
+    };
+
+    const maxRow = await qOne('SELECT MAX(order_index) as m FROM challenges WHERE topic_id = $1', [topic.id]);
+    await pool.query(
+      'INSERT INTO challenges (topic_id, title, description, type, content, order_index) VALUES ($1,$2,$3,$4,$5,$6)',
+      [topic.id, TITLE,
+       'Aplica derivadas e integrales en la fisica real: controla aceleracion para dominar velocidad y posicion',
+       'rocket_lander', JSON.stringify(content), (maxRow.m || 5) + 1]
+    );
+    res.json({ success: true, message: 'Aterrizaje de Precision insertado correctamente' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── START ────────────────────────────────────────────────────────────────────
 initDb()
   .then(() => {
