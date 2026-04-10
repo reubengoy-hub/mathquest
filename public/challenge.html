@@ -984,13 +984,15 @@ function sgFinish(){
 }
 
 // ─────────────────── ROCKET LANDER ───────────────────────────────────────────
-// Aplicaciones de derivadas: a(t) = a_emp − g  (a_emp ya en m/s², no es fuerza)
-//   v = ∫a dt  |  h = ∫v dt
-// Cada nivel = planeta diferente con distinta gravedad y cantidad de combustible
+// Laboratorio de vuelo: el jugador mueve el slider para fijar a_emp (m/s²).
+// Las curvas en tiempo real muestran a(t), v(t) y h(t) y sus relaciones:
+//   pendiente de v(t) = a(t)   →   v = ∫a dt
+//   pendiente de h(t) = v(t)   →   h = ∫v dt
 
-const RL_CVW = 660, RL_CVH = 360;
-const RL_SURF_Y = 308;                // canvas y of planet surface
-const RL_PAD_CX = 330, RL_PAD_W = 88; // landing pad
+const RL_CVW = 720, RL_CVH = 400;
+const RL_ANIM_W = 195;             // left animation column width
+const RL_GX     = RL_ANIM_W + 6;  // graph area start x
+const RL_GW     = RL_CVW - RL_GX - 4; // graph area width
 
 // Polyfill roundRect for older Safari
 if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -1002,18 +1004,23 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
 }
 
 const RL_LEVELS = [
-  { planet:'🌙 Luna',     grav:1.62, fuel:120, initH:320, initV:-18, wind:0,   skyT:'#030308', skyB:'#0a0a1a', sR:155,sG:162,sB:175, desc:'Baja gravedad lunar. Con suavidad llegas sin problema.' },
-  { planet:'🔴 Marte',    grav:3.72, fuel:140, initH:390, initV:-22, wind:0,   skyT:'#0d0303', skyB:'#2a0f0a', sR:158,sG:78, sB:48,  desc:'Gravedad marciana: 38% de la Tierra. ¡Empieza a frenar antes!' },
-  { planet:'🌍 Tierra',   grav:9.81, fuel:200, initH:420, initV:-20, wind:0.5, skyT:'#020308', skyB:'#081830', sR:48, sG:118,sB:68,  desc:'Gravedad terrestre completa + viento. v = ∫a dt cae muy rápido.' },
-  { planet:'🟡 Ío',       grav:1.80, fuel:46,  initH:500, initV:-34, wind:0,   skyT:'#050305', skyB:'#150820', sR:188,sG:158,sB:38,  desc:'Luna de Júpiter: baja gravedad PERO combustible mínimo. ¡Precisión total!' },
-  { planet:'🟠 Venus',    grav:8.87, fuel:170, initH:460, initV:-30, wind:1.2, skyT:'#0d0600', skyB:'#281200', sR:188,sG:145,sB:65,  desc:'Atmósfera densa + fuerte gravedad. El desafío definitivo.' }
+  { planet:'🌙 Luna',   grav:1.62, initH:280, initV:-5,  targetV:3, skyT:'#030308', skyB:'#0a0a1a', sR:155,sG:162,sB:175,
+    desc:'g = 1.62 m/s². Sube el empuje hasta superar g para frenar la caída. Observa la pendiente de v(t).' },
+  { planet:'🔴 Marte',  grav:3.72, initH:360, initV:-18, targetV:3, skyT:'#0d0303', skyB:'#2a0f0a', sR:158,sG:78, sB:48,
+    desc:'g = 3.72 m/s². La curva v(t) cae más rápido. Empieza a frenar antes — cuándo? Cuando v(t) aún es manejable.' },
+  { planet:'🌍 Tierra', grav:9.81, initH:400, initV:-10, targetV:5, skyT:'#020308', skyB:'#081830', sR:48, sG:118,sB:68,
+    desc:'g = 9.81 m/s². La pendiente de v(t) = a(t). Con a positiva, v aumenta; con a negativa, v disminuye.' },
+  { planet:'🟡 Ío',     grav:1.80, initH:480, initV:-48, targetV:5, skyT:'#050305', skyB:'#150820', sR:188,sG:158,sB:38,
+    desc:'g = 1.80 m/s². Velocidad inicial alta (v₀ = −48). Necesitas a > g para que v aumente (frenado). Actúa ya.' },
+  { planet:'🟠 Venus',  grav:8.87, initH:440, initV:-14, targetV:3, skyT:'#0d0600', skyB:'#281200', sR:188,sG:145,sB:65,
+    desc:'g = 8.87 m/s². Desafío final: alta gravedad, aterrizaje de precisión. Domina a(t) → v(t) → h(t).' }
 ];
 
 let rlState = {
   levelIndex:0, content:null, levelScores:[],
-  h:0, v:0, fuel:100, thrusting:false,
-  landed:false, crashed:false, running:false,
-  history:[], time:0, particles:[], stars:[],
+  h:0, v:0, thrustPct:0,   // thrustPct: 0..100 slider value
+  running:false, landed:false,
+  history:[], time:0, stars:[],
   raf:null, lastTs:null
 };
 
@@ -1024,26 +1031,31 @@ function buildRocketLander(c) {
       <div class="rl-prog" id="rl-prog"></div>
       <div class="rl-level-badge"><span id="rl-lnum"></span> &nbsp; <span id="rl-planet"></span></div>
     </div>
-    <div class="rl-desc-box" id="rl-desc"></div>
+    <div class="rl-mission" id="rl-mission"></div>
     <canvas id="rl-canvas" width="${RL_CVW}" height="${RL_CVH}"></canvas>
-    <div class="rl-bottom-bar">
-      <div class="rl-math-box">
-        <div>a(t) = a<sub>emp</sub> − g &nbsp;<span style="font-size:0.72em;opacity:0.7">[a<sub>emp</sub> en m/s²]</span></div>
-        <div>v(t) = ∫a(t) dt</div>
-        <div>h(t) = ∫v(t) dt</div>
+    <div class="rl-ctrl-panel">
+      <div class="rl-vals-col">
+        <div class="rl-val-row"><span class="rl-val-dot" style="background:#fb923c"></span><span class="rl-val-name">a(t)</span><span class="rl-val-num" id="rl-dsp-a">—</span><span class="rl-val-unit">m/s²</span></div>
+        <div class="rl-val-row"><span class="rl-val-dot" style="background:#60a5fa"></span><span class="rl-val-name">v(t)</span><span class="rl-val-num" id="rl-dsp-v">—</span><span class="rl-val-unit">m/s</span></div>
+        <div class="rl-val-row"><span class="rl-val-dot" style="background:#4ade80"></span><span class="rl-val-name">h(t)</span><span class="rl-val-num" id="rl-dsp-h">—</span><span class="rl-val-unit">m</span></div>
       </div>
-      <button class="rl-thrust-btn" id="rl-tbtn"
-        onmousedown="rlSetThrust(true)" onmouseup="rlSetThrust(false)"
-        ontouchstart="rlSetThrust(true);event.preventDefault()" ontouchend="rlSetThrust(false)">
-        🚀 PROPULSORES<br><small>Mantén pulsado</small>
-      </button>
-      <div class="rl-hint-col">
-        <div class="rl-ctrl-hint">También: mantén <kbd>ESPACIO</kbd></div>
-        <div class="rl-land-guide">
-          <span class="rl-guide-ok">✓ &lt;5 m/s → Perfecto</span>
-          <span class="rl-guide-warn">⚠ &lt;15 m/s → Duro</span>
-          <span class="rl-guide-err">✗ ≥15 m/s → Impacto</span>
+      <div class="rl-slider-col">
+        <div class="rl-slider-top">
+          <span class="rl-slider-label">Empuje  <strong id="rl-aemp">0.00</strong> m/s²</span>
+          <span class="rl-slider-hint">↑ ↓ flechas o arrastra</span>
         </div>
+        <div class="rl-slider-row">
+          <span class="rl-scap">0</span>
+          <input type="range" id="rl-slider" class="rl-slider" min="0" max="100" step="1" value="0"
+            oninput="rlSlider(this.value)">
+          <span class="rl-scap" id="rl-scap-max">3g</span>
+        </div>
+        <div class="rl-decomp" id="rl-decomp">a<sub>emp</sub> − g = a<sub>neta</sub></div>
+      </div>
+      <div class="rl-guide-col">
+        <div class="rl-guide-ok">✓ &lt; objetivo → Perfecto</div>
+        <div class="rl-guide-warn">⚠ hasta 3× → Duro</div>
+        <div class="rl-guide-err">✗ más → Impacto</div>
       </div>
     </div>
     <div class="rl-outcome-wrap hidden" id="rl-outcome">
@@ -1058,372 +1070,357 @@ function buildRocketLander(c) {
 }
 
 function initRocketLander(content) {
-  rlState.content = content;
-  rlState.levelIndex = 0;
+  rlState.content     = content;
+  rlState.levelIndex  = 0;
   rlState.levelScores = new Array(RL_LEVELS.length).fill(0);
   document.getElementById('rl-prog').innerHTML =
     RL_LEVELS.map((_,i)=>`<div class="tg-dot" id="rldot-${i}"></div>`).join('');
   document.removeEventListener('keydown', rlKeyDown);
-  document.removeEventListener('keyup',   rlKeyUp);
   document.addEventListener('keydown', rlKeyDown);
-  document.addEventListener('keyup',   rlKeyUp);
   rlLoadLevel();
 }
 
-function rlKeyDown(e){ if(e.code==='Space'){ e.preventDefault(); rlSetThrust(true);  } }
-function rlKeyUp(e)  { if(e.code==='Space')  rlSetThrust(false); }
-function rlLv()      { return RL_LEVELS[rlState.levelIndex]; }
+function rlKeyDown(e) {
+  if(!rlState.running) return;
+  if(e.code==='ArrowUp')  { e.preventDefault(); rlSlider(Math.min(100, rlState.thrustPct+3)); }
+  if(e.code==='ArrowDown'){ e.preventDefault(); rlSlider(Math.max(0,   rlState.thrustPct-3)); }
+}
+function rlLv() { return RL_LEVELS[rlState.levelIndex]; }
+
+function rlSlider(val) {
+  val = parseInt(val);
+  rlState.thrustPct = val;
+  const el = document.getElementById('rl-slider');
+  if(el) el.value = val;
+  rlUpdateDecomp();
+}
+
+function rlUpdateDecomp() {
+  const lv  = rlLv();
+  const aemp = (rlState.thrustPct / 100) * lv.grav * 3;
+  const net  = aemp - lv.grav;
+  const netStr = (net>=0?'+':'')+net.toFixed(2);
+  document.getElementById('rl-aemp').textContent = aemp.toFixed(2);
+  const el = document.getElementById('rl-decomp');
+  if(el) el.innerHTML =
+    `${aemp.toFixed(2)} &minus; ${lv.grav.toFixed(2)} = <strong style="color:${net>0.05?'#4ade80':net<-0.05?'#f87171':'#e2e8f0'}">${netStr} m/s²</strong>`;
+}
 
 function rlLoadLevel() {
   const lv=rlLv(), i=rlState.levelIndex, n=RL_LEVELS.length;
+  // Start slider at hover point: a_emp = g → pct = 1/3 → value ≈ 33
+  const hoverPct = Math.round(100/3);
   Object.assign(rlState, {
-    h:lv.initH, v:lv.initV, fuel:lv.fuel, thrusting:false,
-    landed:false, crashed:false, running:true,
-    history:[], time:0, particles:[], lastTs:null
+    h:lv.initH, v:lv.initV, thrustPct:hoverPct,
+    running:true, landed:false,
+    history:[], time:0, lastTs:null
   });
-  rlState.stars = Array.from({length:75},()=>({
-    x:Math.random()*RL_CVW, y:Math.random()*(RL_SURF_Y-40),
-    r:Math.random()*1.4+0.3, a:Math.random()*0.7+0.3
+  rlState.stars = Array.from({length:60},()=>({
+    x:Math.random()*RL_ANIM_W, y:Math.random()*(RL_CVH*0.75),
+    r:Math.random()*1.3+0.3, a:Math.random()*0.7+0.3
   }));
-  document.getElementById('rl-lnum').textContent  = `Nivel ${i+1} de ${n}`;
-  document.getElementById('rl-planet').textContent = lv.planet;
-  document.getElementById('rl-desc').textContent   = lv.desc;
+
+  document.getElementById('rl-lnum').textContent   = `Nivel ${i+1} de ${n}`;
+  document.getElementById('rl-planet').textContent  = lv.planet;
+  document.getElementById('rl-mission').textContent = lv.desc;
+  document.getElementById('rl-slider').value        = hoverPct;
+  document.getElementById('rl-scap-max').textContent= `${(lv.grav*3).toFixed(1)} m/s²`;
   document.getElementById('rl-outcome').classList.add('hidden');
-  document.getElementById('rl-tbtn').classList.remove('active');
   for(let j=0;j<n;j++){
     const d=document.getElementById(`rldot-${j}`);
     if(d) d.className='tg-dot'+(j<i?' tg-dot-done':j===i?' tg-dot-active':'');
   }
+  rlUpdateDecomp();
   if(rlState.raf) cancelAnimationFrame(rlState.raf);
   rlState.raf = requestAnimationFrame(rlLoop);
 }
 
-function rlSetThrust(on) {
-  if(on && (!rlState.running || rlState.fuel<=0)) return;
-  rlState.thrusting = on;
-  document.getElementById('rl-tbtn')?.classList.toggle('active', on);
-}
-
 function rlHtoY(h) {
-  const maxH=rlLv().initH, topY=48, botY=RL_SURF_Y-50;
-  return botY - Math.min(1,Math.max(0, h/Math.max(maxH, 50))) * (botY-topY);
+  const SURF=RL_CVH-55, topY=38;
+  return SURF - Math.min(1,Math.max(0, h/Math.max(rlLv().initH,20))) * (SURF-topY);
 }
 
 function rlLoop(ts) {
   if(!rlState.running) return;
-  const dt_real = rlState.lastTs ? Math.min((ts-rlState.lastTs)/1000, 0.05) : 0.016;
+  const dt_r = rlState.lastTs ? Math.min((ts-rlState.lastTs)/1000, 0.05) : 0.016;
   rlState.lastTs = ts;
-  const dt = dt_real * 3.0; // 3× time compression
+  const dt = dt_r * 3.0;  // 3× time scale
   const lv = rlLv();
 
-  const thrust_a = (rlState.thrusting && rlState.fuel>0) ? lv.grav*2.65 : 0;
-  const net_a = thrust_a - lv.grav;
+  const aemp  = (rlState.thrustPct/100)*lv.grav*3;
+  const net_a = aemp - lv.grav;
+
   rlState.v    += net_a * dt;
   rlState.h    += rlState.v  * dt;
   rlState.time += dt;
-  if(rlState.thrusting && rlState.fuel>0) {
-    rlState.fuel = Math.max(0, rlState.fuel - 7.5*dt_real);
-    if(rlState.fuel<=0) rlSetThrust(false);
-  }
 
-  // wind wobble (visual only, no horiz physics)
-  const windPhase = lv.wind>0 ? Math.sin(rlState.time*0.9)*lv.wind : 0;
+  rlState.history.push({ t:rlState.time, a:net_a, v:rlState.v, h:rlState.h });
+  if(rlState.history.length > 350) rlState.history.shift();
 
-  rlState.history.push({h:rlState.h, v:rlState.v, a:net_a, t:rlState.time});
-  if(rlState.history.length>220) rlState.history.shift();
+  // Update numeric displays
+  const abvV = Math.abs(rlState.v);
+  const vCol = abvV<lv.targetV?'#4ade80': abvV<lv.targetV*3?'#fbbf24':'#f87171';
+  const aCol = net_a>0.05?'#4ade80': net_a<-0.05?'#f87171':'#e2e8f0';
+  document.getElementById('rl-dsp-a').textContent = (net_a>=0?'+':'')+net_a.toFixed(2);
+  document.getElementById('rl-dsp-a').style.color = aCol;
+  document.getElementById('rl-dsp-v').textContent = rlState.v.toFixed(1);
+  document.getElementById('rl-dsp-v').style.color = vCol;
+  document.getElementById('rl-dsp-h').textContent = Math.max(0,rlState.h).toFixed(0);
 
-  // Exhaust particles
-  if(rlState.thrusting && Math.random()<0.6){
-    const ry=rlHtoY(rlState.h);
-    rlState.particles.push({
-      x:RL_PAD_CX+(Math.random()-0.5)*12, y:ry+52,
-      vx:(Math.random()-0.5)*3.5, vy:Math.random()*6+2,
-      r:Math.random()*4+2, life:1,
-      color:Math.random()<0.5?'#fb923c':'#fbbf24'
-    });
-  }
-  // Wind particles
-  if(lv.wind>0 && Math.random()<0.3){
-    const side = windPhase>0 ? 0 : RL_CVW;
-    rlState.particles.push({
-      x:side, y:Math.random()*RL_SURF_Y,
-      vx:(windPhase>0?1:-1)*(Math.random()*3+1.5), vy:(Math.random()-0.5)*0.5,
-      r:1, life:0.7, color:'rgba(200,200,255,0.5)'
-    });
-  }
-  rlState.particles = rlState.particles.filter(p=>{
-    p.x+=p.vx; p.y+=p.vy; p.life-=0.045; return p.life>0;
-  });
+  rlDraw();
 
-  if(rlState.h<=0){
+  if(rlState.h <= 0){
     rlState.h=0; rlState.running=false;
-    const spd=Math.abs(rlState.v);
-    rlState.crashed = spd>=15;
-    rlDraw(windPhase);
-    if(rlState.crashed) rlExplosion();
-    else rlLandBurst();
-    setTimeout(()=>rlShowResult(spd), rlState.crashed?900:650);
+    rlDraw();
+    setTimeout(()=>rlShowResult(Math.abs(rlState.v)), 300);
     return;
   }
-  rlDraw(windPhase);
   rlState.raf = requestAnimationFrame(rlLoop);
 }
 
-function rlDraw(windPhase=0) {
+function rlDraw() {
   const cv=document.getElementById('rl-canvas'); if(!cv) return;
   const ctx=cv.getContext('2d');
   const W=RL_CVW, H=RL_CVH, lv=rlLv();
 
+  ctx.clearRect(0,0,W,H);
+  rlDrawScene(ctx);
+  rlDrawGraphs(ctx);
+  // Column separator
+  ctx.strokeStyle='rgba(255,255,255,0.08)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(RL_ANIM_W+2,0); ctx.lineTo(RL_ANIM_W+2,H); ctx.stroke();
+}
+
+// ── Left animation panel ──────────────────────────────────────────────────────
+function rlDrawScene(ctx) {
+  const lv=rlLv(), AW=RL_ANIM_W, H=RL_CVH;
+  const SURF_Y=H-52, PAD_CX=AW/2, PAD_W=72;
+
   // Sky
-  const skyG=ctx.createLinearGradient(0,0,0,RL_SURF_Y);
-  skyG.addColorStop(0, lv.skyT); skyG.addColorStop(1, lv.skyB);
-  ctx.fillStyle=skyG; ctx.fillRect(0,0,W,H);
+  const skyG=ctx.createLinearGradient(0,0,0,SURF_Y);
+  skyG.addColorStop(0,lv.skyT); skyG.addColorStop(1,lv.skyB);
+  ctx.fillStyle=skyG; ctx.fillRect(0,0,AW,H);
 
   // Stars
   rlState.stars.forEach(s=>{
-    const twinkle = 0.5+0.5*Math.sin(rlState.time*1.2+s.x*0.1);
-    ctx.globalAlpha=s.a*twinkle;
+    ctx.globalAlpha=s.a*(0.55+0.45*Math.sin(rlState.time+s.x*.05));
     ctx.fillStyle='#fff'; ctx.beginPath();
     ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
   }); ctx.globalAlpha=1;
 
-  // Wind indicator
-  if(lv.wind>0){
-    const dir = windPhase>0?'→→→':'←←←';
-    ctx.fillStyle='rgba(180,200,255,0.35)'; ctx.font='13px monospace';
-    ctx.fillText(`💨 ${dir}`, W-90, 28);
-  }
-
-  // Planet surface
-  const surfG=ctx.createLinearGradient(0,RL_SURF_Y,0,H);
+  // Surface
+  const surfG=ctx.createLinearGradient(0,SURF_Y,0,H);
   surfG.addColorStop(0,`rgb(${lv.sR},${lv.sG},${lv.sB})`);
-  surfG.addColorStop(1,`rgb(${Math.floor(lv.sR*.4)},${Math.floor(lv.sG*.4)},${Math.floor(lv.sB*.4)})`);
-  ctx.fillStyle=surfG; ctx.fillRect(0,RL_SURF_Y,W,H-RL_SURF_Y);
+  surfG.addColorStop(1,`rgb(${Math.floor(lv.sR*.35)},${Math.floor(lv.sG*.35)},${Math.floor(lv.sB*.35)})`);
+  ctx.fillStyle=surfG; ctx.fillRect(0,SURF_Y,AW,H-SURF_Y);
 
-  // Crater decorations
-  [[80,RL_SURF_Y+15,20],[560,RL_SURF_Y+10,14],[200,RL_SURF_Y+22,8]].forEach(([cx,cy,cr])=>{
-    ctx.strokeStyle=`rgba(${Math.floor(lv.sR*.6)},${Math.floor(lv.sG*.6)},${Math.floor(lv.sB*.6)},0.7)`;
-    ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(cx,cy,cr,cr*0.4,0,0,Math.PI*2); ctx.stroke();
-  });
-
-  // Landing pad glow
-  const padL=RL_PAD_CX-RL_PAD_W/2, padR=RL_PAD_CX+RL_PAD_W/2;
-  const padGlow=ctx.createLinearGradient(padL,0,padR,0);
-  padGlow.addColorStop(0,'rgba(255,255,80,0)');
-  padGlow.addColorStop(0.5,'rgba(255,255,80,0.18)');
-  padGlow.addColorStop(1,'rgba(255,255,80,0)');
-  ctx.fillStyle=padGlow; ctx.fillRect(padL,RL_SURF_Y-22,RL_PAD_W,22);
-  // Pad surface
-  ctx.fillStyle='#d4d8e0'; ctx.fillRect(padL,RL_SURF_Y-4,RL_PAD_W,4);
-  // Blinker lights
+  // Landing pad
+  ctx.fillStyle='rgba(255,255,150,0.1)'; ctx.fillRect(PAD_CX-PAD_W/2,SURF_Y-16,PAD_W,16);
+  ctx.fillStyle='#d0d4dc'; ctx.fillRect(PAD_CX-PAD_W/2,SURF_Y-3,PAD_W,3);
   [-1,0,1].forEach(dx=>{
-    const bx=RL_PAD_CX+dx*(RL_PAD_W/2-10);
-    const blink=Math.sin(rlState.time*5+dx*1.8)>0;
-    ctx.fillStyle=blink?'#ffff44':'#888800';
-    ctx.beginPath(); ctx.arc(bx,RL_SURF_Y-8,4,0,Math.PI*2); ctx.fill();
+    const bx=PAD_CX+dx*(PAD_W/2-8);
+    ctx.fillStyle=Math.sin(rlState.time*5+dx*1.8)>0?'#ffff44':'#554400';
+    ctx.beginPath(); ctx.arc(bx,SURF_Y-7,3,0,Math.PI*2); ctx.fill();
   });
 
-  // Altitude bar (right edge)
+  // Altitude bar (right of scene)
   const altFrac=Math.min(1,Math.max(0,rlState.h/rlLv().initH));
-  const abTop=42,abH=RL_SURF_Y-52,abX=W-16;
-  ctx.fillStyle='rgba(255,255,255,0.08)'; ctx.fillRect(abX,abTop,8,abH);
-  ctx.fillStyle='#22c55e'; ctx.fillRect(abX,abTop+abH*(1-altFrac),8,abH*altFrac);
-  ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.font='10px monospace';
-  const altLabel=`${Math.round(Math.max(0,rlState.h))}m`;
-  ctx.fillText(altLabel, abX-ctx.measureText(altLabel).width-4, abTop+abH*(1-altFrac)+4);
+  const abX=AW-10, abTop=30, abH=SURF_Y-40;
+  ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fillRect(abX,abTop,6,abH);
+  ctx.fillStyle='#4ade80'; ctx.fillRect(abX,abTop+abH*(1-altFrac),6,abH*altFrac);
 
-  // Particles
-  rlState.particles.forEach(p=>{
-    ctx.globalAlpha=Math.max(0,p.life)*0.85;
-    ctx.fillStyle=p.color; ctx.beginPath();
-    ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
-  }); ctx.globalAlpha=1;
-
-  // Rocket position
+  // Rocket
   const ry=rlHtoY(rlState.h);
+  const aemp=(rlState.thrustPct/100)*rlLv().grav*3;
+  const thrustOn = aemp > rlLv().grav*0.08;
 
   // Flame
-  if(rlState.thrusting && !rlState.crashed){
-    const fl=20+Math.random()*18;
-    const fg=ctx.createRadialGradient(RL_PAD_CX,ry+48,3,RL_PAD_CX,ry+58+fl,20);
+  if(thrustOn){
+    const fl=Math.max(6, (aemp/rlLv().grav)*14+Math.random()*8);
+    const fg=ctx.createRadialGradient(PAD_CX,ry+46,2,PAD_CX,ry+58+fl,16);
     fg.addColorStop(0,'rgba(255,255,200,0.95)');
-    fg.addColorStop(0.25,'rgba(255,160,30,0.85)');
-    fg.addColorStop(0.7,'rgba(255,60,10,0.45)');
-    fg.addColorStop(1,'rgba(200,0,0,0)');
+    fg.addColorStop(0.3,'rgba(255,150,30,0.8)');
+    fg.addColorStop(1,'rgba(200,50,0,0)');
     ctx.fillStyle=fg;
     ctx.beginPath();
-    ctx.moveTo(RL_PAD_CX-10,ry+42);
-    ctx.quadraticCurveTo(RL_PAD_CX-18,ry+55+fl/2,RL_PAD_CX,ry+60+fl);
-    ctx.quadraticCurveTo(RL_PAD_CX+18,ry+55+fl/2,RL_PAD_CX+10,ry+42);
+    ctx.moveTo(PAD_CX-9,ry+40);
+    ctx.quadraticCurveTo(PAD_CX-14,ry+55+fl/2,PAD_CX,ry+58+fl);
+    ctx.quadraticCurveTo(PAD_CX+14,ry+55+fl/2,PAD_CX+9,ry+40);
     ctx.closePath(); ctx.fill();
   }
 
-  // Draw rocket
-  rlDrawRocket(ctx, RL_PAD_CX, ry, rlState.crashed);
-
-  // ── HUD (top-left) ──
-  const hx=10,hy=10,hw=190,hh=128;
-  ctx.fillStyle='rgba(0,0,0,0.6)';
-  ctx.beginPath(); ctx.roundRect(hx,hy,hw,hh,9); ctx.fill();
-
-  ctx.font='10px monospace'; ctx.fillStyle='#94a3b8';
-  ctx.fillText('ALTITUD',     hx+10, hy+20);
-  ctx.fillText('VELOCIDAD',   hx+10, hy+52);
-  ctx.fillText('ACELERACIÓN', hx+10, hy+84);
-  ctx.fillText('⛽ COMBUSTIBLE', hx+10, hy+112);
-
-  const abvV=Math.abs(rlState.v);
-  const vCol = abvV<5?'#22c55e':abvV<15?'#fbbf24':'#ef4444';
-  const lv2=rlLv(), thr_a=(rlState.thrusting&&rlState.fuel>0)?lv2.grav*2.65:0;
-  const net=thr_a-lv2.grav;
-  const aCol=net>0?'#22c55e':'#ef4444';
-
-  ctx.font='bold 14px monospace';
-  ctx.fillStyle='#e2e8f0'; ctx.fillText(`${Math.round(Math.max(0,rlState.h))} m`,  hx+10, hy+38);
-  ctx.fillStyle=vCol;       ctx.fillText(`${rlState.v.toFixed(1)} m/s`,             hx+10, hy+70);
-  ctx.fillStyle=aCol;       ctx.fillText(`${net>=0?'+':''}${net.toFixed(2)} m/s²`,  hx+10, hy+100);
-
-  // Fuel bar
-  const fPct=rlState.fuel/rlLv().fuel;
-  const fBW=165, fBH=8, fbx=hx+10, fby=hy+118;
-  ctx.fillStyle='#1e293b'; ctx.fillRect(fbx,fby,fBW,fBH);
-  const fCol=fPct>0.5?'#22c55e':fPct>0.2?'#fbbf24':'#ef4444';
-  ctx.fillStyle=fCol; ctx.fillRect(fbx,fby,fBW*fPct,fBH);
-
-  // ── Mini v(t) graph (top-right) ──
-  rlDrawMiniGraph(ctx, W-178, 10, 164, 96);
-}
-
-function rlDrawRocket(ctx, cx, cy, crashed) {
-  ctx.save(); ctx.translate(cx, cy);
-  if(crashed){
-    ctx.rotate(0.7);
-    ctx.fillStyle='#64748b'; ctx.fillRect(-10,-4,20,8);
-    ctx.fillStyle='#475569'; ctx.fillRect(-5,-10,10,10);
-    ctx.restore(); return;
-  }
-  // Fins
+  // Rocket body
+  ctx.save(); ctx.translate(PAD_CX, ry);
   ctx.fillStyle='#475569';
-  ctx.beginPath(); ctx.moveTo(-12,22); ctx.lineTo(-24,44); ctx.lineTo(-12,36); ctx.closePath(); ctx.fill();
-  ctx.beginPath(); ctx.moveTo( 12,22); ctx.lineTo( 24,44); ctx.lineTo( 12,36); ctx.closePath(); ctx.fill();
-  // Nozzle
-  ctx.fillStyle='#64748b'; ctx.fillRect(-9,36,18,11);
-  // Body gradient
-  const bg=ctx.createLinearGradient(-14,0,14,0);
-  bg.addColorStop(0,'#94a3b8'); bg.addColorStop(0.4,'#f1f5f9'); bg.addColorStop(1,'#64748b');
-  ctx.fillStyle=bg;
-  ctx.beginPath(); ctx.roundRect(-12,-26,24,52,4); ctx.fill();
-  // Nose cone
+  ctx.beginPath(); ctx.moveTo(-10,20); ctx.lineTo(-20,40); ctx.lineTo(-10,34); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo( 10,20); ctx.lineTo( 20,40); ctx.lineTo( 10,34); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#64748b'; ctx.fillRect(-7,34,14,9);
+  const bg=ctx.createLinearGradient(-12,0,12,0);
+  bg.addColorStop(0,'#94a3b8'); bg.addColorStop(0.35,'#f1f5f9'); bg.addColorStop(1,'#64748b');
+  ctx.fillStyle=bg; ctx.beginPath(); ctx.roundRect(-10,-22,20,44,3); ctx.fill();
   ctx.fillStyle='#ef4444';
-  ctx.beginPath(); ctx.moveTo(0,-46); ctx.lineTo(-12,-26); ctx.lineTo(12,-26); ctx.closePath(); ctx.fill();
-  // Red stripe
-  ctx.fillStyle='#dc2626'; ctx.fillRect(-12,-4,24,6);
-  // Window
-  ctx.fillStyle='#93c5fd';
-  ctx.beginPath(); ctx.arc(0,-14,7.5,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.55)';
-  ctx.beginPath(); ctx.arc(-2.5,-17,3,0,Math.PI*2); ctx.fill();
-  // Thruster ring glow
-  if(rlState.thrusting){
-    ctx.strokeStyle='rgba(255,150,30,0.7)'; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.arc(0,36,14,0,Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,-40); ctx.lineTo(-10,-22); ctx.lineTo(10,-22); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#dc2626'; ctx.fillRect(-10,-4,20,5);
+  ctx.fillStyle='#93c5fd'; ctx.beginPath(); ctx.arc(0,-12,6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(-2,-15,2.5,0,Math.PI*2); ctx.fill();
+  if(thrustOn){
+    ctx.strokeStyle='rgba(255,150,30,0.65)'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(0,34,11,0,Math.PI*2); ctx.stroke();
   }
   ctx.restore();
+
+  // Velocity arrow indicator beside rocket
+  const abvV=Math.abs(rlState.v);
+  if(abvV>0.3){
+    const arrX=PAD_CX+26, arrLen=Math.min(45,abvV*1.8);
+    const dir=rlState.v>=0?-1:1;
+    const aCol=abvV<rlLv().targetV?'#4ade80':abvV<rlLv().targetV*3?'#fbbf24':'#f87171';
+    ctx.strokeStyle=aCol; ctx.fillStyle=aCol; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(arrX,ry); ctx.lineTo(arrX,ry+arrLen*dir); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(arrX,ry+arrLen*dir);
+    ctx.lineTo(arrX-5,ry+arrLen*dir-5*dir);
+    ctx.lineTo(arrX+5,ry+arrLen*dir-5*dir);
+    ctx.closePath(); ctx.fill();
+  }
 }
 
-function rlDrawMiniGraph(ctx, x, y, w, h) {
-  ctx.fillStyle='rgba(0,0,0,0.55)';
-  ctx.beginPath(); ctx.roundRect(x,y,w,h,7); ctx.fill();
-  ctx.fillStyle='#64748b'; ctx.font='10px monospace';
-  ctx.fillText('v(t) — velocidad', x+7, y+14);
-
+// ── Right graphs panel ────────────────────────────────────────────────────────
+function rlDrawGraphs(ctx) {
   const hist=rlState.history;
-  if(hist.length<3) return;
-  const gx=x+7,gy=y+20,gw=w-14,gh=h-32;
-  const vs=hist.map(r=>r.v);
-  const vMin=Math.min(-0.5,...vs), vMax=Math.max(0.5,...vs), vR=vMax-vMin;
-  const toGX=i=>gx+(i/(hist.length-1))*gw;
-  const toGY=v=>gy+gh-((v-vMin)/vR)*gh;
+  const ROWS=[
+    { key:'a', label:'a(t)', unit:'m/s²', col:'#fb923c', fill:'rgba(251,146,60,0.15)',  note:'pendiente de v(t)' },
+    { key:'v', label:'v(t)', unit:'m/s',  col:'#60a5fa', fill:'rgba(96,165,250,0.15)',  note:'pendiente de h(t)' },
+    { key:'h', label:'h(t)', unit:'m',    col:'#4ade80', fill:'rgba(74,222,128,0.12)',  note:'altitud' }
+  ];
+  const ROW_H=Math.floor(RL_CVH/3);
+  const LP=46, RP=6, TP=20, BP=18; // left/right/top/bot padding inside each row
 
-  // Zero line
-  const zy=Math.max(gy,Math.min(gy+gh,toGY(0)));
-  ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
-  ctx.beginPath(); ctx.moveTo(gx,zy); ctx.lineTo(gx+gw,zy); ctx.stroke();
-  ctx.setLineDash([]);
+  ROWS.forEach((row, ri)=>{
+    const ry0=ri*ROW_H, ry1=ry0+ROW_H-4;
+    const PX=RL_GX+LP, PY=ry0+TP, PW=RL_GW-LP-RP, PH=ROW_H-TP-BP-4;
 
-  // Filled area under curve
-  ctx.beginPath();
-  hist.forEach((r,i)=>{
-    const px=toGX(i), py=Math.max(gy,Math.min(gy+gh,toGY(r.v)));
-    i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    // Background
+    ctx.fillStyle='rgba(6,8,18,0.94)';
+    ctx.fillRect(RL_GX, ry0, RL_GW, ROW_H-4);
+
+    if(hist.length<2){ return; }
+
+    const vals=hist.map(r=>r[row.key]);
+    let vMin=Math.min(...vals), vMax=Math.max(...vals);
+    const rng=vMax-vMin;
+    if(rng<0.2){ vMin-=1; vMax+=1; } else { vMin-=rng*0.1; vMax+=rng*0.1; }
+    const vR=vMax-vMin;
+    const toX=i=>PX+(i/(hist.length-1))*PW;
+    const toY=v=>PY+PH-Math.max(0,Math.min(PH,((v-vMin)/vR)*PH));
+
+    // Grid lines + y-axis labels
+    const nG=4;
+    ctx.strokeStyle='rgba(255,255,255,0.05)'; ctx.lineWidth=1;
+    ctx.fillStyle='rgba(148,163,184,0.65)'; ctx.font='9px monospace';
+    ctx.textAlign='right';
+    for(let li=0;li<=nG;li++){
+      const gy=PY+(li/nG)*PH;
+      ctx.beginPath(); ctx.moveTo(PX,gy); ctx.lineTo(PX+PW,gy); ctx.stroke();
+      const val=vMax-(li/nG)*vR;
+      const s=Math.abs(val)<100?val.toFixed(1):Math.round(val).toString();
+      ctx.fillText(s, PX-3, gy+3);
+    }
+    ctx.textAlign='left';
+
+    // Zero line
+    if(vMin<0 && vMax>0){
+      const zy=toY(0);
+      ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1.5;
+      ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(PX,zy); ctx.lineTo(PX+PW,zy); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='9px monospace';
+      ctx.fillText('0', PX-22, zy+3);
+    }
+
+    // Filled area to zero
+    const zeroClamp=Math.max(PY,Math.min(PY+PH,toY(0)));
+    ctx.beginPath();
+    vals.forEach((v,i)=>{ const px=toX(i),py=toY(v); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); });
+    ctx.lineTo(toX(vals.length-1),zeroClamp);
+    ctx.lineTo(PX,zeroClamp);
+    ctx.closePath();
+    ctx.fillStyle=row.fill; ctx.fill();
+
+    // Main curve
+    ctx.beginPath(); ctx.strokeStyle=row.col; ctx.lineWidth=2.2;
+    vals.forEach((v,i)=>{ const px=toX(i),py=toY(v); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); });
+    ctx.stroke();
+
+    // Current point dot
+    const curV=vals[vals.length-1], curX=PX+PW, curY=toY(curV);
+    ctx.fillStyle=row.col; ctx.beginPath(); ctx.arc(curX,curY,4.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#0f172a'; ctx.beginPath(); ctx.arc(curX,curY,2,0,Math.PI*2); ctx.fill();
+
+    // ── Derivative tangent indicator ──
+    // Slope of this graph = value of graph above
+    if(hist.length>12){
+      const N=Math.min(12, Math.floor(hist.length*0.12));
+      const dv=vals[vals.length-1]-vals[vals.length-1-N];
+      const dx_px=N/(hist.length-1)*PW;
+      const dy_px=-(dv/vR)*PH;  // negative because y is flipped
+      const slopeLen=30;
+      const mag=Math.sqrt(dx_px*dx_px+dy_px*dy_px)||1;
+      const sdx=(dx_px/mag)*slopeLen, sdy=(dy_px/mag)*slopeLen;
+      ctx.strokeStyle=`${row.col}bb`; ctx.lineWidth=2;
+      ctx.beginPath();
+      ctx.moveTo(curX-sdx,curY-sdy);
+      ctx.lineTo(curX,curY);
+      ctx.stroke();
+    }
+
+    // Row label (left)
+    ctx.fillStyle=row.col; ctx.font='bold 11px monospace';
+    ctx.fillText(row.label, RL_GX+4, ry0+TP+8);
+    ctx.fillStyle='rgba(148,163,184,0.6)'; ctx.font='9px monospace';
+    ctx.fillText(row.note, RL_GX+4, ry1-2);
+
+    // Current value (top-right)
+    const curStr=(Math.abs(curV)<1000)?curV.toFixed(1):Math.round(curV).toString();
+    ctx.fillStyle=row.col; ctx.font='bold 11px monospace';
+    ctx.textAlign='right';
+    ctx.fillText(curStr+' '+row.unit, RL_GX+RL_GW-4, ry0+TP+8);
+    ctx.textAlign='left';
+
+    // ── Connecting arrow between rows (derivative label) ──
+    if(ri<2){
+      const arrowX=RL_GX+RL_GW-12;
+      const arrowY=ry1-1;
+      const nextCol=ROWS[ri+1].col;
+      const derivLabel=ri===0?'= pendiente de v(t)':'= pendiente de h(t)';
+      ctx.fillStyle='rgba(100,116,139,0.7)'; ctx.font='9px monospace';
+      ctx.textAlign='right';
+      ctx.fillText('↓ '+derivLabel, arrowX, arrowY);
+      ctx.textAlign='left';
+    }
   });
-  ctx.lineTo(gx+gw,gy+gh); ctx.lineTo(gx,gy+gh); ctx.closePath();
-  ctx.fillStyle='rgba(96,165,250,0.18)'; ctx.fill();
 
-  // v(t) line
-  ctx.beginPath(); ctx.strokeStyle='#60a5fa'; ctx.lineWidth=2;
-  hist.forEach((r,i)=>{
-    const px=toGX(i), py=Math.max(gy,Math.min(gy+gh,toGY(r.v)));
-    i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
-  });
-  ctx.stroke();
-
-  // Current v label
-  const curV=rlState.v, absCur=Math.abs(curV);
-  const vLblCol=absCur<5?'#22c55e':absCur<15?'#fbbf24':'#ef4444';
-  ctx.fillStyle=vLblCol; ctx.font='bold 12px monospace';
-  const lbl=`${curV.toFixed(1)}`;
-  ctx.fillText(lbl, x+w-ctx.measureText(lbl).width-30, y+h-6);
-  ctx.fillStyle='#94a3b8'; ctx.font='10px monospace';
-  ctx.fillText('m/s', x+w-26, y+h-6);
-}
-
-function rlLandBurst() {
-  const cols=['#fbbf24','#22c55e','#60a5fa','#f472b6','#a78bfa','#34d399'];
-  for(let i=0;i<40;i++) rlState.particles.push({
-    x:RL_PAD_CX+(Math.random()-0.5)*50, y:RL_SURF_Y-15,
-    vx:(Math.random()-0.5)*13, vy:-(Math.random()*13+4),
-    r:Math.random()*5+2, life:1,
-    color:cols[Math.floor(Math.random()*cols.length)]
-  });
-  const t0=Date.now();
-  (function boom(){
-    if(Date.now()-t0>1300){rlState.particles=[];return;}
-    rlState.particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.35;p.life-=0.018;});
-    rlDraw();requestAnimationFrame(boom);
-  })();
-}
-
-function rlExplosion() {
-  const cols=['#ef4444','#fb923c','#fbbf24','#e11d48','#ff6060'];
-  for(let i=0;i<50;i++) rlState.particles.push({
-    x:RL_PAD_CX+(Math.random()-0.5)*80, y:RL_SURF_Y-8,
-    vx:(Math.random()-0.5)*18, vy:-(Math.random()*14),
-    r:Math.random()*9+3, life:1,
-    color:cols[Math.floor(Math.random()*cols.length)]
-  });
-  const t0=Date.now();
-  (function boom(){
-    if(Date.now()-t0>1100){rlState.particles=[];return;}
-    rlState.particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.55;p.life-=0.02;});
-    rlDraw();requestAnimationFrame(boom);
-  })();
+  // Time axis label
+  ctx.fillStyle='rgba(100,116,139,0.55)'; ctx.font='10px monospace';
+  ctx.fillText(`t = ${rlState.time.toFixed(1)} s`, RL_GX+4, RL_CVH-2);
 }
 
 function rlShowResult(spd) {
+  const lv=rlLv();
   let score, stars, title, detail;
-  if(spd<3){
+  if(spd < lv.targetV*0.6){
     score=100; stars='⭐⭐⭐'; title='🎯 ¡Aterrizaje perfecto!';
-    detail=`Velocidad de contacto: ${spd.toFixed(1)} m/s\nDominas la integración de la aceleración.`;
-  } else if(spd<8){
+    detail=`v = ${spd.toFixed(1)} m/s al contacto\nDominas a(t) → v(t) → h(t).`;
+  } else if(spd < lv.targetV){
     score=80; stars='⭐⭐'; title='✅ ¡Aterrizaje exitoso!';
-    detail=`Velocidad de contacto: ${spd.toFixed(1)} m/s\nBuen control de v = ∫a dt.`;
-  } else if(spd<15){
-    score=45; stars='⭐'; title='⚠️ ¡Aterrizaje duro!';
-    detail=`Velocidad de contacto: ${spd.toFixed(1)} m/s\nEmpieza a frenar más temprano: v acumula con ∫a dt.`;
+    detail=`v = ${spd.toFixed(1)} m/s al contacto\nBuen control de la integración.`;
+  } else if(spd < lv.targetV*3){
+    score=40; stars='⭐'; title='⚠️ Aterrizaje duro';
+    detail=`v = ${spd.toFixed(1)} m/s al contacto\nSube el empuje antes: la pendiente de v(t) = a(t).`;
   } else {
     score=0; stars='💥'; title='¡Impacto!';
-    detail=`Velocidad de impacto: ${spd.toFixed(1)} m/s\nRecuerda: v(t) = v₀ + ∫a·dt — actúa antes.`;
+    detail=`v = ${spd.toFixed(1)} m/s al contacto\nWhen a_neta > 0, v sube (frenado). Actúa cuando h aún da margen.`;
   }
   rlState.levelScores[rlState.levelIndex]=score;
   document.getElementById(`rldot-${rlState.levelIndex}`)?.classList.replace('tg-dot-active','tg-dot-done');
