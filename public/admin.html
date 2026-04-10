@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MathQuest — Admin</title>
   <link rel="stylesheet" href="css/style.css">
+  <style>
+    .progress-detail-table { width:100%; border-collapse:collapse; font-size:0.82rem; margin-top:6px; }
+    .progress-detail-table th { background:var(--bg-secondary); padding:6px 10px; text-align:left; font-weight:600; color:var(--text-muted); border-bottom:1px solid var(--border); }
+    .progress-detail-table td { padding:6px 10px; border-bottom:1px solid var(--border); }
+    .progress-detail-table tr:last-child td { border-bottom:none; }
+    .progress-detail-table tr:hover td { background:var(--bg-secondary); }
+    .ud-topic-block { margin-bottom:18px; }
+    .ud-topic-title { font-weight:700; font-size:0.95rem; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+    .ud-loading { color:var(--text-muted); font-size:0.9rem; padding:16px 0; }
+    .score-high { color:#22c55e; font-weight:600; }
+    .score-mid  { color:#f59e0b; font-weight:600; }
+    .score-low  { color:#ef4444; font-weight:600; }
+  </style>
 </head>
 <body>
 
@@ -128,6 +141,7 @@
 <script>
 let currentTopicId = null;
 let questionCount = 0;
+const userSessions = {};
 
 (async () => {
   const me = await checkAuth(true);
@@ -158,9 +172,11 @@ async function loadUsers() {
   tbody.innerHTML = '';
 
   users.forEach(u => {
+    userSessions[u.id] = u.sessions || [];
+
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td><button class="expand-btn" onclick="toggleDetail('ud-${u.id}', this)">▶</button></td>
+      <td><button class="expand-btn" onclick="toggleDetail('ud-${u.id}', this, ${u.id})">▶</button></td>
       <td><strong>${u.username}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">Registrado: ${fmtDate(u.created_at)}</span></td>
       <td>${fmtDate(u.last_login)}</td>
       <td><code style="font-size:0.8rem;">${u.last_ip || '—'}</code></td>
@@ -170,30 +186,12 @@ async function loadUsers() {
       <td>${fmtTime(u.total_time)}</td>`;
     tbody.appendChild(row);
 
-    // Detail row
+    // Detail row — content loaded lazily on first expand
     const detRow = document.createElement('tr');
     detRow.id = `ud-${u.id}`;
     detRow.className = 'user-detail-row hidden';
     detRow.innerHTML = `<td colspan="8"><div class="user-detail-inner">
-      <strong>Progreso por tema:</strong>
-      <div class="topic-progress-mini">
-        ${u.topicProgress.map(t => `
-          <div class="topic-mini-card">
-            <h5>${t.icon || '📚'} ${t.name}</h5>
-            <div class="progress-bar" style="margin-bottom:6px;">
-              <div class="progress-fill" style="width:${t.total ? Math.round((t.done/t.total)*100) : 0}%"></div>
-            </div>
-            <div style="font-size:0.78rem;color:var(--text-muted)">
-              ${t.done}/${t.total} completados · Media: ${t.avg ? Math.round(t.avg)+'%' : '—'}<br>
-              Tiempo: ${fmtTime(t.time_spent)}
-            </div>
-          </div>`).join('')}
-      </div>
-      <div style="margin-top:10px;"><strong>Sesiones recientes:</strong>
-        <div class="session-list">
-          ${u.sessions.map(s => `<span title="${fmtDate(s.login_at)}">${s.ip_address} — ${fmtDate(s.login_at)}</span>`).join('') || '—'}
-        </div>
-      </div>
+      <div id="ud-content-${u.id}" class="ud-loading">Cargando progreso…</div>
     </div></td>`;
     tbody.appendChild(detRow);
   });
@@ -203,11 +201,74 @@ async function loadUsers() {
   }
 }
 
-function toggleDetail(id, btn) {
+function toggleDetail(id, btn, userId) {
   const row = document.getElementById(id);
   const open = !row.classList.contains('hidden');
   row.classList.toggle('hidden', open);
   btn.textContent = open ? '▶' : '▼';
+  if (!open && !row.dataset.loaded) {
+    row.dataset.loaded = '1';
+    loadUserDetail(userId);
+  }
+}
+
+const TYPE_LABELS = { quiz:'Quiz', fill_blank:'Completar', matching:'Emparejar', transform_game:'Juego Matrices', slope_hunter:'Juego Derivadas' };
+
+async function loadUserDetail(userId) {
+  const container = document.getElementById(`ud-content-${userId}`);
+  try {
+    const topics = await API.get(`/api/admin/users/${userId}/progress`);
+    const sessions = userSessions[userId] || [];
+
+    const topicsHtml = topics.map(t => {
+      const rowsHtml = t.challenges.map(c => {
+        let statusHtml;
+        if (c.completed) statusHtml = '<span style="color:#22c55e;font-weight:600;">✓ Completado</span>';
+        else if (c.attempts) statusHtml = '<span style="color:#f59e0b;font-weight:600;">○ En progreso</span>';
+        else statusHtml = '<span style="color:var(--text-muted);">— Sin empezar</span>';
+
+        let scoreHtml = '—';
+        if (c.best_score != null) {
+          const s = Math.round(c.best_score);
+          const cls = s >= 80 ? 'score-high' : s >= 50 ? 'score-mid' : 'score-low';
+          scoreHtml = `<span class="${cls}">${s}%</span>`;
+        }
+
+        return `<tr>
+          <td>${c.title}</td>
+          <td><span class="badge badge-gray">${TYPE_LABELS[c.type] || c.type}</span></td>
+          <td>${statusHtml}</td>
+          <td>${scoreHtml}</td>
+          <td>${c.best_time != null ? fmtTime(c.best_time) : '—'}</td>
+          <td>${c.attempts || 0}</td>
+          <td>${c.last_attempt_at ? fmtDate(c.last_attempt_at) : '—'}</td>
+        </tr>`;
+      }).join('');
+
+      return `<div class="ud-topic-block">
+        <div class="ud-topic-title">${t.icon || '📚'} ${t.name}</div>
+        <table class="progress-detail-table">
+          <thead><tr>
+            <th>Ejercicio</th><th>Tipo</th><th>Estado</th>
+            <th>Mejor puntuación</th><th>Tiempo empleado</th><th>Intentos</th><th>Último intento</th>
+          </tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;">Sin ejercicios</td></tr>'}</tbody>
+        </table>
+      </div>`;
+    }).join('');
+
+    const sessionsHtml = `<div style="margin-top:14px;">
+      <strong>Sesiones recientes:</strong>
+      <div class="session-list">
+        ${sessions.map(s => `<span title="${fmtDate(s.login_at)}">${s.ip_address} — ${fmtDate(s.login_at)}</span>`).join('') || '—'}
+      </div>
+    </div>`;
+
+    container.className = '';
+    container.innerHTML = topicsHtml + sessionsHtml;
+  } catch (e) {
+    container.innerHTML = `<span style="color:#ef4444;">Error al cargar progreso: ${e.message}</span>`;
+  }
 }
 
 async function loadTopics() {

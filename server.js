@@ -327,6 +327,27 @@ app.post('/api/admin/seed-transform', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── ADMIN USER DETAIL ────────────────────────────────────────────────────────
+
+app.get('/api/admin/users/:id/progress', requireAdmin, async (req, res) => {
+  try {
+    const topics = await q('SELECT * FROM topics ORDER BY order_index');
+    const result = await Promise.all(topics.map(async t => {
+      const challenges = await q(`
+        SELECT c.id, c.title, c.type, c.order_index,
+               up.best_score, up.attempts, up.best_time,
+               up.completed, up.last_attempt_at
+        FROM challenges c
+        LEFT JOIN user_progress up ON up.challenge_id = c.id AND up.user_id = $1
+        WHERE c.topic_id = $2
+        ORDER BY c.order_index, c.id
+      `, [req.params.id, t.id]);
+      return { ...t, challenges };
+    }));
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── SEED SLOPE HUNTER ────────────────────────────────────────────────────────
 
 app.post('/api/admin/seed-slope-hunter', requireAdmin, async (req, res) => {
