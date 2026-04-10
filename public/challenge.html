@@ -984,7 +984,8 @@ function sgFinish(){
 }
 
 // ─────────────────── ROCKET LANDER ───────────────────────────────────────────
-// Aplicaciones de derivadas: a(t) = empuje − g  |  v = ∫a dt  |  h = ∫v dt
+// Aplicaciones de derivadas: a(t) = a_emp − g  (a_emp ya en m/s², no es fuerza)
+//   v = ∫a dt  |  h = ∫v dt
 // Cada nivel = planeta diferente con distinta gravedad y cantidad de combustible
 
 const RL_CVW = 660, RL_CVH = 360;
@@ -1027,7 +1028,7 @@ function buildRocketLander(c) {
     <canvas id="rl-canvas" width="${RL_CVW}" height="${RL_CVH}"></canvas>
     <div class="rl-bottom-bar">
       <div class="rl-math-box">
-        <div>a(t) = F<sub>emp</sub> − g</div>
+        <div>a(t) = a<sub>emp</sub> − g &nbsp;<span style="font-size:0.72em;opacity:0.7">[a<sub>emp</sub> en m/s²]</span></div>
         <div>v(t) = ∫a(t) dt</div>
         <div>h(t) = ∫v(t) dt</div>
       </div>
